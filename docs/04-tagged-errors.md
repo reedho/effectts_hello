@@ -1,118 +1,134 @@
-# 04 — Tagged errors
+# 04 — Tagged errors and defects
 
 > Story: [`stories/04-tagged-errors.ts`](../stories/04-tagged-errors.ts)
 > Reference: [`tbiz_ts/packages/api-client/src/error.ts`](../../../works/tbiz_ts/packages/api-client/src/error.ts), [`.../rpc-client/src/errors.ts`](../../../works/tbiz_ts/packages/rpc-client/src/errors.ts)
 
-## Why tagged errors?
+effect-solutions puts `Schema.TaggedErrorClass` front and center. It's the recommended way to model domain errors — and unlike `Data.TaggedError`, the resulting class is Schema-integrated (serializable, decodable, and composable with other schemas).
 
-Plain `Error` subclasses merge together in Effect's error channel — you lose the ability to handle each one distinctly at the type level. Tagged errors fix this by giving every error class a literal `_tag` field that TypeScript can narrow on.
+## `Schema.TaggedErrorClass` — the recommended form
 
 ```ts
-class ApiError extends Data.TaggedError("ApiError")<{
-  readonly code: string
-  readonly message: string
-  readonly status?: number
-  readonly cause?: unknown
-}> {}
+class ApiError extends Schema.TaggedErrorClass<ApiError>()("ApiError", {
+  code: Schema.String,
+  message: Schema.String,
+  status: Schema.optional(Schema.Number),
+}) {}
 
-class AuthError extends Data.TaggedError("AuthError")<{
-  readonly message: string
-  readonly code: "TOKEN_EXPIRED" | "TOKEN_INVALID" | "UNAUTHORIZED"
-}> {}
+class AuthError extends Schema.TaggedErrorClass<AuthError>()("AuthError", {
+  message: Schema.String,
+  code: Schema.Literals(["TOKEN_EXPIRED", "TOKEN_INVALID", "UNAUTHORIZED"]),
+}) {}
 ```
 
-Each class:
-- has a literal `_tag` property (e.g. `"ApiError"`)
-- is constructed with `new ApiError({ code: "E_400", message: "…" })`
-- supports structural equality (via `Data`)
-- has a stack trace
+Each class is:
 
-## Failing with a typed error
+- a schema (you can decode it, stringify it, serialize it, send it over the wire)
+- a constructor (`new ApiError({ ... })`)
+- a **yieldable Effect** — no `Effect.fail` wrapper needed
+- tagged with `_tag` for exhaustive pattern matching
+
+## Yieldable — skip `Effect.fail`
+
+This is the biggest ergonomic win. You don't wrap:
 
 ```ts
-const fetchUser = (id: string): Effect.Effect<User, ApiError | AuthError> =>
-  Effect.gen(function* () {
-    if (!id) {
-      return yield* Effect.fail(
-        new ApiError({ code: "EBAD", message: "id is required", status: 400 }),
-      )
-    }
-    // ...
+// ✅ The effect-solutions idiom
+return Effect.gen(function* () {
+  if (!id) yield* new ApiError({ code: "EBAD", message: "id is required" })
+  // ...
+})
+
+// ❌ Works, but unnecessary noise — the language-service flags this
+yield* Effect.fail(new ApiError({ ... }))
+```
+
+Our storybook earlier used the wrapped form; the language-service diagnostic `unnecessaryFailYieldableError` pointed it out. We switched. You should too.
+
+## Recover with `catchTag` / `catchTags`
+
+```ts
+const recovered = pipe(
+  fetchUser(id),
+  Effect.catchTag("AuthError", (e) =>
+    // e is narrowed to AuthError
+    Effect.succeed({ id: "guest", name: `fallback (${e.code})` }),
+  ),
+)
+```
+
+For several tags at once, `Effect.catchTags({ Tag: handler, ... })`. If you handle every tag in the error union, the remaining error channel is `never`.
+
+## `Schema.Defect` — wrapping foreign errors
+
+When you call fetch / axios / firebase / any non-Effect library, the "error" value could be anything. `Schema.Defect` stores it losslessly AND keeps the result serializable:
+
+```ts
+class NetworkError extends Schema.TaggedErrorClass<NetworkError>()("NetworkError", {
+  message: Schema.String,
+  cause: Schema.Defect,   // safely holds anything — Error, unknown, whatever
+}) {}
+
+const fetchSomething = (url: string) =>
+  Effect.tryPromise({
+    try: () => fetch(url).then(r => r.json()),
+    catch: (error) => new NetworkError({ message: `fetch ${url}`, cause: error }),
   })
 ```
 
-The union in the return type (`ApiError | AuthError`) is the signature the caller sees. No surprises — if a function claims it can fail with `X | Y`, those are the only typed failures possible.
+Why not just `unknown`? Because you can serialize a `NetworkError` to JSON (to ship to a logging service, or persist in a DB), and `Schema.Defect` turns the inner Error/object into something round-trippable. `unknown` breaks on `JSON.stringify`.
 
-## Handling errors by `_tag`
+## Typed errors vs. defects
 
-`Effect.catchTag` narrows on `_tag`:
+effect-solutions draws a hard line:
+
+- **Typed errors** — things the caller can sensibly handle: 404, auth, validation, rate limits. Tracked in the `E` channel of `Effect<A, E, R>`.
+- **Defects** — unrecoverable: bugs, invariant violations, "the config wasn't there at startup." Not in `E`. They terminate the fiber and propagate until caught at the system edge (logger, crash reporter).
+
+### `Effect.orDie` — convert typed error → defect
+
+Use it where recovery is meaningless:
 
 ```ts
-const withRefresh = pipe(
-  fetchUser(id),
-  Effect.catchTag("AuthError", (e) =>
-    // e is narrowed to AuthError here
-    Effect.succeed({ id: "guest", name: `fallback (was ${e.code})` }),
+const main = Effect.gen(function* () {
+  const cfg = yield* loadConfig.pipe(Effect.orDie)   // if config fails: die
+  yield* app(cfg)
+})
+```
+
+Now `loadConfig`'s typed error disappears from the `E` channel. If it ever fails, the fiber dies — which is the right thing at startup. No one can write `Effect.catchTag("ConfigError", ...)` in business code and accidentally silence a fatal.
+
+### `Effect.catchDefect` — only at the edge
+
+Almost never. Only for top-level logging/diagnostics or plugin sandboxing:
+
+```ts
+const logged = pipe(
+  someProgram,
+  Effect.catchDefect((defect) =>
+    Effect.sync(() => {
+      log.fatal(defect)
+      return "recovered-for-logging"
+    }),
   ),
 )
 ```
 
-The error channel afterward is `ApiError` only — `AuthError` has been handled.
+By the time you're catching a defect, the program is already in a bad state. Catching just gives you a chance to report it before shutdown.
 
-For several tags at once, `Effect.catchTags` takes a record:
+## Legacy: `Data.TaggedError`
 
-```ts
-const handled = pipe(
-  fetchUser(id),
-  Effect.catchTags({
-    ApiError:     (e) => Effect.succeed(`API ${e.code}: ${e.message}`),
-    AuthError:    ()  => Effect.succeed("please log in"),
-    NetworkError: (e) => Effect.succeed(`retry later: ${e.message}`),
-  }),
-)
-```
-
-If you handle every tag in the union, the remaining error channel is `never`.
-
-## Lifting errors at service boundaries
-
-A common pattern in `tbiz_ts/packages/api-client/src/qilin/common.ts`: catch low-level errors from Effect libraries (`HttpBodyError`, `ConfigError`, `HttpClientError`) and lift them into your domain error type, so callers only deal with `ApiError`:
+Still supported. Still all over `tbiz_ts`. Structurally similar, but **not Schema-integrated** — no validation, no serialization. Fine for simple cases; prefer `Schema.TaggedErrorClass` in new code.
 
 ```ts
-const call = doCallApi(req).pipe(
-  Effect.mapError((e): ApiError =>
-    e instanceof ApiError
-      ? e
-      : new ApiError({ code: "E_WRAP", message: e.message, cause: e })
-  ),
-)
+class LegacyError extends Data.TaggedError("LegacyError")<{
+  readonly message: string
+}> {}
 ```
-
-Or, tag by tag:
-
-```ts
-pipe(
-  program,
-  Effect.catchTag("HttpBodyError", (e) =>
-    Effect.fail(new ApiError({ code: "EREQ", message: "bad body", cause: e })),
-  ),
-  Effect.catchTag("HttpClientError", (e) =>
-    Effect.fail(new ApiError({ code: "ERESP", message: e.message, cause: e })),
-  ),
-)
-```
-
-Either shape works. The point is: **your service exposes your errors**, not someone else's.
-
-## Design rule
-
-One tagged error class per meaningful failure mode in your domain. Too few (e.g. a single `DomainError`) and you lose the precision that makes `catchTag` useful. Too many and the union types get unwieldy.
-
-Look at [`packages/rpc-client/src/errors.ts`](../../../works/tbiz_ts/packages/rpc-client/src/errors.ts) for a reasonable middle — four tagged errors (`RpcError`, `NetworkError`, `ParseError`, `AuthError`) covering everything a JSON-RPC client can fail on.
 
 ## Takeaways
 
-- `Data.TaggedError("Tag")<Payload>` creates a structural, narrowable error class.
-- `Effect.catchTag("Tag", fn)` handles one case and removes it from `E`.
-- `Effect.catchTags({...})` handles several at once.
-- Lift third-party errors into your domain type at service boundaries.
+- `Schema.TaggedErrorClass<Self>()("Tag", {fields})` — preferred error shape.
+- Yield it directly: `yield* new Err(...)`. No `Effect.fail`.
+- `Schema.Defect` for wrapping foreign errors inside your tagged errors.
+- Typed errors = recoverable. Defects = unrecoverable. Don't blur the line.
+- `Effect.orDie` to promote a typed error to a defect at boundaries.

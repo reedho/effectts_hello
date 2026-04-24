@@ -1,128 +1,147 @@
 # 06 — Config and ConfigProviders
 
 > Story: [`stories/06-config-and-providers.ts`](../stories/06-config-and-providers.ts)
-> Reference: [`tbiz_ts/packages/api-client/src/config.ts`](../../../works/tbiz_ts/packages/api-client/src/config.ts), [`.../example/service_config.ts`](../../../works/tbiz_ts/packages/api-client/src/example/service_config.ts)
+> Reference: [`tbiz_ts/packages/api-client/src/config.ts`](../../../works/tbiz_ts/packages/api-client/src/config.ts)
 
 ## The idea
 
-Hardcoding config values is fine for a prototype. For real apps you want:
+Hardcoding config is fine for a prototype. For real apps you want:
 
 - Typed reads with defaults
+- **Schema-validated** primitives (with brands) — one Schema reused for config, HTTP boundaries, forms
 - Secrets that don't leak into logs
-- A way to swap the source (env, test fixture, `import.meta.env`, static object)
+- A way to swap the source (env, tests, `import.meta.env`, static object)
 
-Effect's `Config` module handles all three. `ConfigProvider` is the pluggable source.
+## `Config.schema` — the recommended path
 
-## Describing your config
-
-Build a typed tree of required values, defaults, and namespaces:
+effect-solutions strongly prefers `Config.schema(Schema, "ENV_NAME")` over `Config.mapOrFail`. You reuse the same Schema for everything:
 
 ```ts
-const DbConfig = Config.nested("DB")(
-  Config.all({
-    host:     Config.string("HOST").pipe(Config.withDefault("localhost")),
-    port:     Config.number("PORT").pipe(Config.withDefault(5432)),
-    user:     Config.string("USER").pipe(Config.withDefault("postgres")),
-    password: Config.redacted("PASSWORD").pipe(Config.withDefault(Redacted.make("demo"))),
-  }),
+const Port = Schema.NumberFromString.pipe(
+  Schema.check(Schema.isInt()),
+  Schema.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
+  Schema.brand("Port"),
 )
+type Port = typeof Port.Type
+
+const Environment = Schema.Literals(["development", "staging", "production"])
 ```
 
-- `Config.nested("DB")(...)` scopes child lookups under the `DB` prefix.
-- `Config.all({...})` combines multiple configs into a record.
-- `Config.withDefault(x)` makes the read optional.
-- `Config.redacted(...)` keeps the value out of `toString` output (`"<redacted>"`).
+- `Schema.NumberFromString` transforms the env-var string into a number.
+- Checks enforce "int in [1, 65535]".
+- Brand makes it a nominal `Port`, not interchangeable with raw numbers.
 
-Primitives: `string`, `nonEmptyString`, `number`, `int`, `boolean`, `duration`, `port`, `date`, `url`, `redacted`, `literal`.
-
-### Deriving the type
+Consume it from a Config:
 
 ```ts
-type DbConfigType = typeof DbConfig extends Config.Config<infer T> ? T : never
+const port = yield* Config.schema(Port, "PORT")
+// port: Port (branded, validated)
 ```
 
-In v3 this was `Config.Config.Success<typeof DbConfig>`. That alias doesn't exist in v4 — inline the conditional as above.
+That same `Port` schema also decodes HTTP query params, validates form input, etc. One source of truth.
 
-## Reading config inside an Effect
+## Wrapping Config in a Service
+
+This is the key structural pattern. A Config service has a `layer` (reads from the provider) and a `testLayer` (hardcoded values):
 
 ```ts
-const showDefaults = Effect.gen(function* () {
-  const db = yield* DbConfig
-  console.log(db.host, db.port, db.user, String(db.password))  // "<redacted>"
-})
+class AppConfig extends Context.Service<AppConfig, {
+  readonly host: string
+  readonly port: Port
+  readonly env: Environment
+  readonly apiKey: Redacted.Redacted
+}>()("app/AppConfig") {
+  static readonly layer = Layer.effect(AppConfig)(
+    Effect.gen(function* () {
+      const host   = yield* Config.string("HOST").pipe(Config.withDefault("localhost"))
+      const port   = yield* Config.schema(Port, "PORT")
+      const env    = yield* Config.schema(Environment, "APP_ENV")
+      const apiKey = yield* Config.redacted("API_KEY")
+      return { host, port, env, apiKey }
+    }),
+  )
+
+  static readonly testLayer = Layer.succeed(AppConfig)({
+    host: "localhost",
+    port: Schema.decodeUnknownSync(Port)("8080"),
+    env: "development",
+    apiKey: Redacted.make("test-key"),
+  })
+}
 ```
 
-`yield* DbConfig` resolves the config using whichever `ConfigProvider` is currently in scope. By default, Effect reads `process.env`.
+Downstream services depend on `AppConfig` — never on `Config` primitives directly.
 
 ## Redacted values
 
 ```ts
-String(db.password)          // "<redacted>"
-Redacted.value(db.password)  // "demo" — explicit unwrap
+String(cfg.apiKey)          // "<redacted>"
+Redacted.value(cfg.apiKey)  // "s3cret" — explicit unwrap
 ```
 
-The `Redacted` wrapper hides the value from casual stringification — logging, error messages, JSON.stringify — while still letting authorized code reach the plaintext with `Redacted.value`. Use it for passwords, tokens, client secrets.
+`Redacted` hides the value from casual stringification — logs, error messages, accidental `JSON.stringify` — while letting authorized code reach the plaintext. Use it for passwords, API tokens, client secrets.
 
-## Swapping the source: `ConfigProvider.fromUnknown`
+## Swapping the source: `ConfigProvider`
 
-The default provider reads `process.env`. For tests and browsers (where `process.env` is unavailable) you supply values inline:
+Default: reads `process.env`. For tests and browsers, supply values inline:
 
 ```ts
 const provider = ConfigProvider.fromUnknown({
-  DB: {
-    HOST: "db.staging.internal",
-    PORT: "6543",
-    USER: "api",
-    PASSWORD: "s3cret",
-  },
+  HOST: "db.staging.internal",
+  PORT: "6543",
+  APP_ENV: "staging",
+  API_KEY: "s3cret",
 })
 
 await Effect.runPromise(
-  program.pipe(Effect.provide(ConfigProvider.layer(provider))),
+  program.pipe(
+    Effect.provide(
+      AppConfig.layer.pipe(Layer.provide(ConfigProvider.layer(provider))),
+    ),
+  ),
 )
 ```
 
-### v4-beta.57 gotcha
+### beta.57 gotcha
 
-`fromUnknown` reads **by literal path segments**. Your `Config.nested("DB")(Config.string("HOST"))` looks up `root.DB.HOST` — so the input needs the *nested* shape above, not flat `{ DB_HOST: "…" }`.
-
-For the flat `DB_HOST` style used by env vars, reach for `ConfigProvider.fromEnv({...})` instead — that splits keys on `_`. Older tbiz_ts code (beta.31) mixed these up because the older fromUnknown was more lenient.
-
-### v3 → v4 rename
+`fromUnknown` reads by **literal path segments**. `Config.nested("DB")(Config.string("HOST"))` looks up `root.DB.HOST`. So pass a nested object:
 
 ```ts
-// v3
-Layer.provide(Layer.setConfigProvider(provider))
-
-// v4
-Layer.provide(ConfigProvider.layer(provider))
+ConfigProvider.fromUnknown({
+  DB: { HOST: "localhost", PORT: "5432" }   // ✅
+  // not { DB_HOST: "localhost" } — that's the env-style flat form
+})
 ```
 
-## Wrapping Config in a Service
+For the flat `DB_HOST` style used by env vars, use `ConfigProvider.fromEnv({...})` instead — that splits on `_`.
 
-Often you want other services to depend on config **as a service**, not as a free-floating `yield*`. Wrap it:
+### v3 → v4 renames
 
 ```ts
-class DbConfigService extends Context.Service<DbConfigService, DbConfigType>()(
-  "app/DbConfig",
-) {}
+Layer.setConfigProvider(provider)  // v3
+ConfigProvider.layer(provider)     // v4
 
-const DbConfigLive = Layer.effect(DbConfigService)(
-  Effect.gen(function* () {
-    return yield* DbConfig   // resolves through the ambient ConfigProvider
-  }),
-)
+Config.Config.Success<typeof X>    // v3
+T extends Config.Config<infer U> ? U : never   // v4
 
-// Useful in React apps where you've already read env at build time:
-const makeDbConfigLayer = (cfg: DbConfigType) =>
-  Layer.succeed(DbConfigService)(cfg)
+Config.mapOrFail(predicate)        // still works
+Config.schema(Schema, "NAME")      // recommended
 ```
 
-This is exactly the pattern in `RpcConfigService` ([`rpc-client/src/config.ts`](../../../works/tbiz_ts/packages/rpc-client/src/config.ts)). Browser bundles often can't read env at runtime, so they construct a `makeXxxConfigLayer(staticValues)` at the edge.
+## Skip the provider in tests — just use `testLayer`
+
+effect-solutions suggests avoiding `ConfigProvider.fromUnknown` in tests entirely. Provide `AppConfig.testLayer` directly — your business code doesn't care that there even *is* a Config module behind the service:
+
+```ts
+Effect.runPromise(program.pipe(Effect.provide(AppConfig.testLayer)))
+```
+
+Simpler than orchestrating a ConfigProvider, and each test can specialise with its own `Layer.succeed(AppConfig, {...})` inline.
 
 ## Takeaways
 
-- `Config` describes the **shape** of your required environment.
-- `Redacted` keeps secrets out of logs — unwrap with `Redacted.value`.
-- `ConfigProvider.fromUnknown` swaps the source for tests; its key form is **literal path segments** (nested object), not env-style `DB_HOST`.
-- Wrap Config in a `Context.Service` when downstream services need to depend on it.
+- Validate + brand with `Config.schema(BrandedSchema, "ENV")` rather than `Config.mapOrFail`.
+- Wrap config in a `Context.Service` with `layer` + `testLayer` statics.
+- Always `Config.redacted` secrets; unwrap with `Redacted.value`.
+- `fromUnknown` → nested object shape; `fromEnv` → flat `SCREAMING_SNAKE`.
+- Tests skip ConfigProvider entirely — just provide `AppConfig.testLayer`.

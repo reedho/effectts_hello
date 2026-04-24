@@ -5,40 +5,101 @@
 
 ## What is a Schema?
 
-A `Schema<T>` is **both** a runtime validator and a TypeScript type. One definition, two uses:
+A `Schema<T>` is **both** a runtime validator and a TypeScript type. One definition, two uses. The TypeScript type is **derived** from the schema, not declared separately — you never drift.
+
+effect-solutions teaches four big ideas. We follow them here:
+
+1. Use **`Schema.Class`** for composite records (adds methods).
+2. Use **`Schema.TaggedClass` + `Schema.Union`** for structured variants, pair with **`Match.valueTags`** for exhaustive matching.
+3. **Brand nearly every** domain primitive — not just IDs.
+4. Use **`Schema.fromJsonString`** for JSON codecs in one step.
+
+## Schema.Class — composite records with methods
 
 ```ts
-const Price = Schema.Struct({
-  amount: Schema.Number,
-  currency: Schema.String,
-})
+class User extends Schema.Class<User>("User")({
+  id: UserId,
+  name: Schema.String,
+  email: Email,
+  createdAt: Schema.String,
+}) {
+  get displayName() {
+    return `${this.name} <${this.email}>`
+  }
+}
 
-type Price = Schema.Schema.Type<typeof Price>
-//   ^? { readonly amount: number; readonly currency: string }
-
-const parsed = Schema.decodeUnknownSync(Price)(input)   // throws on failure
+const alice = new User({ id: ..., name: "Alice", ... })
+console.log(alice.displayName) // "Alice <...>"
 ```
 
-The TypeScript type is **derived** from the schema, not declared separately. You never drift between them.
+Construct with `new`. Pass a plain object matching the field schemas. Validation runs at construction time (and throws `SchemaError` on bad input — or you can decode instead with `Schema.decodeUnknownSync(User)(...)`).
 
-## The v4 primitives
+`Schema.Struct({...})` still exists and still works for ad-hoc shapes. Prefer `Schema.Class` when you have something that looks like a domain type.
 
-| Schema                             | Describes                                  |
-| ---------------------------------- | ------------------------------------------ |
-| `Schema.Struct({...})`             | Product type (object with known keys)      |
-| `Schema.Literal("x")`              | Single literal value                       |
-| `Schema.Literals(["a","b","c"])`   | **Multi**-literal union (array form!)      |
-| `Schema.Union([A, B, C])`          | Sum type (array form!)                     |
-| `Schema.Tuple([A, B])`             | Fixed-length tuple (array form!)           |
-| `Schema.Record(K, V)`              | Record (positional args)                   |
-| `Schema.Array(X)`                  | Readonly array                             |
-| `Schema.optional(X)`               | Field may be missing                       |
-| `Schema.NullOr(X)`                 | Value may be `null`                        |
-| `Schema.String.pipe(Schema.brand("UserId"))` | Nominal type — `string & Brand<"UserId">` |
+## Schema.TaggedClass + Schema.Union for variants
 
-### The array-form trap
+```ts
+class PaymentSucceeded extends Schema.TaggedClass<PaymentSucceeded>("PaymentSucceeded")(
+  "PaymentSucceeded",
+  { transactionId: Schema.String, amount: Schema.Number },
+) {}
 
-`Schema.Union`, `Schema.Tuple`, and **multi-value** `Schema.Literals` all take a single array argument in v4. In v3 they were variadic. Easy to miss when you're porting code or reading LLM-generated examples:
+class PaymentFailed extends Schema.TaggedClass<PaymentFailed>("PaymentFailed")(
+  "PaymentFailed",
+  { reason: Schema.String, retryable: Schema.Boolean },
+) {}
+
+const PaymentResult = Schema.Union([PaymentSucceeded, PaymentFailed])
+type PaymentResult = typeof PaymentResult.Type
+```
+
+Each variant auto-gets a literal `_tag` field. Match on it with `Match.valueTags` — the compiler enforces exhaustiveness:
+
+```ts
+const describe = (r: PaymentResult) =>
+  Match.valueTags(r, {
+    PaymentSucceeded: ({ transactionId, amount }) => `OK ${transactionId} ($${amount})`,
+    PaymentFailed: ({ reason, retryable }) =>
+      retryable ? `retry: ${reason}` : `abort: ${reason}`,
+  })
+```
+
+Add a new variant, and TypeScript tells you where you need to update the match.
+
+## Brand nearly every primitive
+
+Branded types prevent mixing values that have the same underlying runtime type but different meaning. In a healthy domain, you have dozens of them — IDs, emails, URLs, ports, percentages, slugs, currency codes.
+
+```ts
+export const UserId = Schema.String.pipe(Schema.brand("UserId"))
+export const PostId = Schema.String.pipe(Schema.brand("PostId"))
+
+export const Email = Schema.String.pipe(
+  Schema.check(Schema.isPattern(/.+@.+\..+/, { message: "invalid email" })),
+  Schema.brand("Email"),
+)
+
+export const Port = Schema.Int.pipe(
+  Schema.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
+  Schema.brand("Port"),
+)
+```
+
+Construct branded values by decoding:
+
+```ts
+const port: Port = Schema.decodeUnknownSync(Port)(8080)
+```
+
+`getUser(userId)` will compile; `getUser(postId)` won't. Same with `Email` vs raw string. You pay one line of boilerplate and get a type error every time someone would've silently passed the wrong kind of value.
+
+### `.makeUnsafe` / `Schema.make`
+
+Later Effect betas ship a runtime `.makeUnsafe` method on branded schemas for cheap construction without decoding. In beta.57 it isn't exposed yet — use `Schema.decodeUnknownSync(Brand)(value)` as the portable form.
+
+## The v4 array-form trap
+
+`Schema.Union`, `Schema.Tuple`, and **multi-value** `Schema.Literals` all take a single array argument in v4:
 
 ```ts
 // v4  ✅
@@ -49,55 +110,42 @@ Schema.Tuple([Schema.Number, Schema.Number])
 // v3  ❌ (compile error in v4)
 Schema.Literal("DINAS", "TRAINING", "CONFERENCE")
 Schema.Union(Schema.String, Schema.Number)
-Schema.Tuple(Schema.Number, Schema.Number)
 ```
 
-Single-value `Schema.Literal("2.0")` is unchanged.
+Single-value `Schema.Literal("2.0")` is unchanged. `Schema.Record(K, V)` takes positional args.
 
 ## `optional` vs `NullOr`
-
-They look similar but they're orthogonal:
 
 - `Schema.optional(X)` — the **key** may be missing.
 - `Schema.NullOr(X)` — the **value** may be `null`.
 
-Real APIs often use both:
-
-```ts
-Schema.Struct({
-  email: Schema.NullOr(Schema.String),                    // null allowed, key required
-  phone: Schema.optional(Schema.NullOr(Schema.String)),   // null OR missing
-})
-```
+Real APIs often use both: `phone: Schema.optional(Schema.NullOr(Schema.String))`.
 
 ## Arrays are readonly
 
-`Schema.Array(X)` produces `readonly T[]`. This means any component that consumes schema-derived data must accept a `readonly` array:
+`Schema.Array(X)` produces `readonly T[]`. Component props consuming schema-derived data must accept `readonly T[]`.
+
+## JSON in one step: `Schema.fromJsonString`
+
+Parse + validate together (or encode + stringify together) with a single schema:
 
 ```ts
-function renderPassengers(pax: readonly TripPax[]) { ... }  // ✅
-function renderPassengers(pax: TripPax[]) { ... }           // ❌ won't accept readonly input
+const UserFromJson = Schema.fromJsonString(User)
+
+const decoded = await Effect.runPromise(
+  Schema.decodeUnknownEffect(UserFromJson)(
+    '{"id":"u-2","name":"Bob","email":"bob@example.com",...}'
+  )
+)
+// decoded is a User instance — with displayName getter and everything
 ```
 
-`tbiz_ts` calls this out explicitly in its CLAUDE.md — it's a common source of TypeScript friction.
-
-## Brands — nominal types on the cheap
-
-```ts
-const UserId = Schema.String.pipe(Schema.brand("UserId"))
-type UserId  = Schema.Schema.Type<typeof UserId>
-//   ^? string & Brand<"UserId">
-
-const OrgId  = Schema.String.pipe(Schema.brand("OrgId"))
-type OrgId   = Schema.Schema.Type<typeof OrgId>
-```
-
-At runtime both are plain strings. At compile time TypeScript treats them as distinct — so you can't accidentally pass a `UserId` where an `OrgId` is expected. This is the cheapest way to prevent mixing IDs across domains.
+Beats `JSON.parse` + `Schema.decodeUnknownSync(User)` in two ways: one fewer step, and JSON parse errors flow through the Effect error channel instead of throwing separately.
 
 ## Takeaways
 
-- One schema gives you a validator and a type.
-- Use the **array form** for `Union`, `Tuple`, multi-value `Literals`.
-- `optional` is about the **key**; `NullOr` is about the **value**.
-- Schema arrays are `readonly`.
-- Reach for `brand` whenever you have ID-like strings that shouldn't be interchangeable.
+- **Records** → `Schema.Class("Name")({...})` with methods.
+- **Variants** → `Schema.TaggedClass` + `Schema.Union` + `Match.valueTags`.
+- **Primitives** → brand everything with domain meaning.
+- Array-form for `Union`, `Tuple`, multi-`Literals`.
+- `Schema.fromJsonString` for JSON codecs.

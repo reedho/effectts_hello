@@ -44,7 +44,7 @@ await Effect.runPromise(hello)   // Promise<string>
 
 If an Effect fails, `runSync`/`runPromise` throw. For a safer, inspectable result, use `runPromiseExit` (covered in chapter 8).
 
-## The preferred coding style: `Effect.gen`
+## `Effect.gen` — the preferred body style
 
 Read it as "async/await, but for `Effect`":
 
@@ -59,6 +59,37 @@ const program = Effect.gen(function* () {
 Every `yield*` unwraps one Effect. On failure, the generator short-circuits — the rest of the body doesn't run, and the outer Effect carries the error.
 
 **Why this style?** In v4, services are tags that can *only* be consumed via `yield* MyService` inside `Effect.gen`. You can't `pipe(tag, Effect.flatMap(...))` anymore. So you'll end up writing `Effect.gen` constantly — might as well start with it.
+
+## `Effect.fn` — the preferred *function* style
+
+For any Effect-returning function you'd otherwise declare as `const x = (args) => Effect.gen(...)`, **effect-solutions recommends** wrapping in `Effect.fn`:
+
+```ts
+const loadUser = Effect.fn("loadUser")(function* (id: string) {
+  yield* Effect.sleep("10 millis")
+  return { id, name: "Ridho" }
+})
+```
+
+Benefits:
+
+- **Call-site trace** — when this Effect fails, the stack shows where it was *invoked*, not just where it was defined.
+- **Telemetry span** — the string name becomes a span automatically (OpenTelemetry and friends pick it up).
+- **Cleaner signature** — no explicit `Effect.gen(function*…)` wrapper.
+
+The two-argument form adds cross-cutting instrumentation without nesting the body:
+
+```ts
+const fetchFlaky = Effect.fn("fetchFlaky")(
+  function* (url: string) { /* ... */ },
+  (self) => self.pipe(
+    Effect.timeout(Duration.seconds(2)),
+    Effect.retry(Schedule.recurs(3)),
+  ),
+)
+```
+
+You'll see `Effect.fn` all over the service-method examples in chapter 5.
 
 ## Failure is a value
 
@@ -89,4 +120,4 @@ If you see `Effect.catchAll` in older docs or in `tbiz_ts` code (which targets b
 
 ## What's next
 
-Chapter 2 moves on to modeling data — the other half of every Effect program.
+Chapter 2 moves on to modeling data — the other half of every Effect program. You'll switch from `Schema.Struct` to `Schema.Class` and start branding every domain primitive.

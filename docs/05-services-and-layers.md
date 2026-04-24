@@ -5,11 +5,9 @@
 
 ## Vocabulary
 
-- **Service** — a typed dependency slot. "I need a thing of shape `X`."
-- **Layer** — a recipe for building and wiring services. "Here's how to construct an `X`."
+- **Service** — a typed dependency slot.
+- **Layer** — a recipe for building and wiring services.
 - **`R` in `Effect<A, E, R>`** — the set of services this Effect requires.
-
-You can write programs without ever touching a real implementation. Providing the Layer at the edge is what makes it executable.
 
 ## Declaring a service
 
@@ -21,14 +19,16 @@ interface GreeterShape {
 class Greeter extends Context.Service<Greeter, GreeterShape>()("app/Greeter") {}
 ```
 
-**Naming convention** (from tbiz_ts): the shape interface and the class can't share the same name. Suffix the shape with `Shape` (or call it `AuthServiceShape`, `RpcClientService`, whatever — just be consistent).
+### Convention: class + shape interface
+
+Shape and class can't share a name. Suffix with `Shape` (or `ServiceShape`). This is the tbiz_ts convention.
 
 ### Version note
 
-The `tbiz_ts` code uses `ServiceMap.Service<Self, Shape>()("id")`. In effect-beta.57 the module was renamed to `Context`. The pattern is identical:
+effect-solutions still documents `ServiceMap.Service`. In **effect-beta.57** that module was renamed to `Context`. Identical API:
 
 ```ts
-// beta.31 (tbiz_ts)
+// beta.31 (tbiz_ts, effect-solutions docs)
 import { ServiceMap } from "effect"
 class X extends ServiceMap.Service<X, XShape>()("id") {}
 
@@ -37,105 +37,126 @@ import { Context } from "effect"
 class X extends Context.Service<X, XShape>()("id") {}
 ```
 
-## Providing an implementation
+## Providing implementations — `layer` / `testLayer`
 
-Two constructors — both **curried**:
+The effect-solutions naming convention: attach the layers as **static** class properties, named **`layer`** (production) and **`testLayer`** (lightweight test impl):
 
 ```ts
-const GreeterLive = Layer.succeed(Greeter)({
-  greet: (name) => Effect.succeed(`Hello, ${name}!`),
-})
+class GreeterImpl {
+  static readonly layer = Layer.effect(Greeter)(
+    Effect.gen(function* () {
+      const greet = Effect.fn("Greeter.greet")(function* (name: string) {
+        return `Hello, ${name}!`
+      })
+      return { greet }
+    }),
+  )
+
+  static readonly testLayer = Layer.succeed(Greeter)({
+    greet: (name) => Effect.succeed(`[test] hi ${name}`),
+  })
+}
 ```
 
-If the implementation itself needs Effects (e.g., it reads config, other services, or does I/O during construction), use `Layer.effect`:
+Notice the service method is wrapped in `Effect.fn("Greeter.greet")(...)`. Every method that returns an Effect gets a call-site trace and a telemetry span for free.
+
+### The #1 v3 → v4 trap: curried Layer constructors
 
 ```ts
-const LoggerLive = Layer.effect(Logger)(
-  Effect.gen(function* () {
-    const clock = yield* Clock   // Logger depends on Clock
-    return {
-      info: (msg) => Effect.gen(function* () {
-        const t = yield* clock.now()
-        console.log(`[${t}] ${msg}`)
-      }),
-    }
-  }),
-)
-```
-
-### The #1 v3 → v4 trap
-
-The curried form. If you write `Layer.effect(Tag, effect)` (v3), TypeScript will complain loudly:
-
-```ts
-Layer.effect(MyService, Effect.gen(...))      // ❌ v3
-Layer.effect(MyService)(Effect.gen(...))      // ✅ v4
-Layer.succeed(MyService, impl)                 // ❌ v3
-Layer.succeed(MyService)(impl)                 // ✅ v4
+Layer.effect(MyService, effect)       // ❌ v3
+Layer.effect(MyService)(effect)       // ✅ v4
+Layer.succeed(MyService, impl)        // ❌ v3
+Layer.succeed(MyService)(impl)        // ✅ v4
 ```
 
 ## Consuming a service
 
-Inside `Effect.gen`, `yield* Tag` hands you the service instance:
+Inside `Effect.gen`, `yield* Tag` hands you the service. Services are **not** Effects — you can't `pipe(Tag, Effect.flatMap(...))`.
 
 ```ts
-const program = Effect.gen(function* () {
+const program = Effect.fn("program")(function* () {
   const greeter = yield* Greeter
-  const msg = yield* greeter.greet("Ridho")
-  return msg
+  return yield* greeter.greet("Ridho")
 })
 ```
 
-Services are **not** Effects. You can't `pipe(Greeter, Effect.flatMap(...))`. Always through `yield*`.
+## Wiring the graph
 
-## Wiring layers
-
-- `Layer.merge(A, B)` — combined Layer that provides both services (peers).
-- `Layer.provide(X, Y)` — Y's dependencies are satisfied by X.
-- `Layer.mergeAll(A, B, C)` — merge many.
-
-The dependency graph pattern:
+- `Layer.mergeAll(A, B, C)` / `Layer.merge(A, B)` — peers offered side-by-side.
+- `Layer.provide(X, Y)` — X satisfies Y's dependencies.
+- `Layer.provideMerge(X, Y)` — like `provide` but also exposes X (useful when tests need to assert on the dependency).
 
 ```ts
-const AppLive = LoggerLive.pipe(
-  Layer.provide(ClockLive),      // Logger needed Clock; hand it over
+const AppLayer = Logger.layer.pipe(Layer.provideMerge(Clock.layer))
+```
+
+Once `Effect.provide` satisfies all services, `R` reaches `never` and the Effect runs at the top level.
+
+### Provide **once** at the edge
+
+effect-solutions is explicit about this: call `Effect.provide` once in `main`, not scattered through business logic. Makes the dependency graph obvious, makes tests trivial (swap `appLayer` for `testLayer`), prevents hidden re-constructions.
+
+## Layer memoization — the pool-doubling gotcha
+
+Effect memoizes layers **by reference identity**. Call a parameterized layer constructor twice inline and you get two instances — two connection pools, two caches, two of everything:
+
+```ts
+// ❌ Two connection pools, each with 10 connections. Can hit server limits.
+const badApp = Layer.mergeAll(
+  UserRepo.layer.pipe(Layer.provide(Postgres.layer({ url, poolSize: 10 }))),
+  OrderRepo.layer.pipe(Layer.provide(Postgres.layer({ url, poolSize: 10 }))),
 )
 
-await Effect.runPromise(
-  program.pipe(Effect.provide(AppLive)),
+// ✅ One pool, shared by both repos.
+const pgLayer = Postgres.layer({ url, poolSize: 10 })
+const goodApp = Layer.mergeAll(
+  UserRepo.layer.pipe(Layer.provide(pgLayer)),
+  OrderRepo.layer.pipe(Layer.provide(pgLayer)),
 )
 ```
 
-Once `Effect.provide` satisfies all services, the `R` parameter reaches `never` and the Effect is runnable at the top level.
+**Rule:** parameterized layer constructors → store the result in a const, reuse the const.
 
-## Multi-variant Layers
+## Service-Driven Development
 
-A convention from tbiz_ts: attach alternate Layers as static fields on the class. Callers pick whichever the environment calls for:
+Sketch **leaf tags** across the graph *before* writing implementations. You can write higher-level orchestration that type-checks right away — the infra comes later.
 
 ```ts
-class Mailer extends Context.Service<Mailer, MailerShape>()("app/Mailer") {
-  static Live = Layer.succeed(Mailer)({
-    send: (to, body) => Effect.succeed(`[PROD] emailed ${to}`),
-  })
+// Leaf contracts — no impls yet
+class Users extends Context.Service<Users, {
+  readonly findById: (id: string) => Effect.Effect<{ id: string; email: string }>
+}>()("app/Users") {}
 
-  static Mock = Layer.succeed(Mailer)({
-    send: (to, body) => Effect.succeed(`[MOCK] would email ${to}`),
-  })
+class Emails extends Context.Service<Emails, {
+  readonly send: (to: string, body: string) => Effect.Effect<void>
+}>()("app/Emails") {}
+
+// Higher-level service — already implementable against the leaf contracts
+class Notifier extends Context.Service<Notifier, {
+  readonly welcome: (userId: string) => Effect.Effect<void>
+}>()("app/Notifier") {
+  static readonly layer = Layer.effect(Notifier)(
+    Effect.gen(function* () {
+      const users = yield* Users
+      const emails = yield* Emails
+
+      const welcome = Effect.fn("Notifier.welcome")(function* (userId: string) {
+        const u = yield* users.findById(userId)
+        yield* emails.send(u.email, `Welcome, ${u.id}!`)
+      })
+
+      return { welcome }
+    }),
+  )
 }
-
-// In production code
-program.pipe(Effect.provide(Mailer.Live))
-
-// In tests
-program.pipe(Effect.provide(Mailer.Mock))
 ```
 
-`QilinServiceImpl.Default` and `PegasusServiceImpl.Live` in tbiz_ts follow this pattern exactly.
+This lets you stabilise the *shape* of the system before picking a database or an email provider. Swap real layers in later without touching `Notifier`.
 
 ## Takeaways
 
-- `Context.Service<Self, Shape>()("id")` declares the slot.
-- `Layer.succeed(Tag)(impl)` and `Layer.effect(Tag)(effect)` fill it. **Curried!**
-- `yield* Tag` inside `Effect.gen` consumes the service.
-- `Layer.provide` / `Layer.merge` compose the graph.
-- Use static `Live` / `Mock` Layer fields as the test swap.
+- `Context.Service<Self, Shape>()("id")` declares the slot (`ServiceMap` in older betas).
+- `static readonly layer` and `static readonly testLayer` — canonical attachment.
+- `Effect.fn("Name.method")(function*() { ... })` for service methods.
+- `Layer.succeed` / `Layer.effect` are **curried**.
+- Provide once at the edge; sketch leaf tags first; store parameterized layers in a const.
