@@ -1,28 +1,28 @@
 /**
  * 05 — Services and Layers (dependency injection).
  *
- * A **Service** is a typed dependency slot. A **Layer** is a recipe for
- * constructing and wiring services together.
+ * effect-solutions recommends:
+ *   - `static readonly layer`   (production implementation)
+ *   - `static readonly testLayer` (lightweight test implementation)
+ *   - `Effect.fn("Name.method")(function* () { ... })` for service methods
+ *     (gives call-site tracing and a span name for telemetry)
+ *   - Sketch leaf service *tags* first; implement later ("service-driven
+ *     development")
+ *   - `Effect.provide` **once** at the edge — don't scatter it
  *
- * ⚠️ tbiz_ts targets effect-beta.31 where the class is `ServiceMap.Service`.
- * This project uses effect-beta.57 where the **identical pattern** is
- * `Context.Service<Self, Shape>()("id")`. Same shape, different module.
- *
- * In **both** versions:
- *   - `Layer.succeed` and `Layer.effect` are **curried**:
- *        `Layer.effect(Tag)(Effect.gen(...))`    ✅
- *        `Layer.effect(Tag, Effect.gen(...))`    ❌ (v3)
- *   - You consume a service with `yield* Tag` inside `Effect.gen`.
+ * Version skew note: effect-solutions documents `ServiceMap.Service`; in
+ * effect-beta.57 that module was renamed to `Context`. Same pattern,
+ * different import. We use `Context.Service` throughout.
  *
  * Run: `bun stories/05-services-and-layers.ts`
- * Real-world: `packages/auth/src/auth.ts`, `packages/api-client/src/qilin.ts`
  */
 
 import { Context, Effect, Layer } from "effect";
 
-/* ---------- 1. Define a service (shape + tag) ---------------------------- *
- * Convention: name the shape `FooShape` and the class tag `Foo`. Can't use
- * the same name for the interface and the class.
+/* ---------- 1. Sketch a leaf service tag — no impl yet ------------------- *
+ * This is the core of "service-driven development": write the *contract*
+ * first, across the whole graph. Higher-level code can be written and
+ * type-checked immediately, without waiting for infra.
  */
 
 interface GreeterShape {
@@ -31,106 +31,166 @@ interface GreeterShape {
 
 class Greeter extends Context.Service<Greeter, GreeterShape>()("app/Greeter") {}
 
-/* ---------- 2. Provide an implementation via Layer.succeed --------------- *
- * `Layer.succeed(Tag)(impl)` — curried.
- * Use this when the impl has no effects/dependencies to resolve.
+/* ---------- 2. Production implementation — `static readonly layer` ------ */
+
+class GreeterImpl {
+  static readonly layer = Layer.effect(Greeter)(
+    Effect.gen(function* () {
+      // Service methods — use Effect.fn for call-site tracing + span name
+      const greet = Effect.fn("Greeter.greet")(function* (name: string) {
+        return `Hello, ${name}!`;
+      });
+      return { greet };
+    }),
+  );
+
+  // Test implementation — deterministic, lightweight
+  static readonly testLayer = Layer.succeed(Greeter)({
+    greet: (name) => Effect.succeed(`[test] hi ${name}`),
+  });
+}
+
+/* ---------- 3. Consume the service via yield* ---------------------------- *
+ * Services are *not* Effect values — you can't pipe them. Consume with
+ * `yield* Tag` inside an `Effect.gen`.
  */
 
-const GreeterLive = Layer.succeed(Greeter)({
-  greet: (name) => Effect.succeed(`Hello, ${name}!`),
+const program = Effect.fn("program")(function* () {
+  const greeter = yield* Greeter;
+  return yield* greeter.greet("Ridho");
 });
 
-/* ---------- 3. Consume the service --------------------------------------- */
+console.log(
+  "3a) prod:",
+  await Effect.runPromise(program().pipe(Effect.provide(GreeterImpl.layer))),
+);
+console.log(
+  "3b) test:",
+  await Effect.runPromise(program().pipe(Effect.provide(GreeterImpl.testLayer))),
+);
 
-const program = Effect.gen(function* () {
-  const greeter = yield* Greeter; // unwrap the service
-  const msg = yield* greeter.greet("Ridho");
-  return msg;
-});
-
-const msg = await Effect.runPromise(program.pipe(Effect.provide(GreeterLive)));
-console.log("3) Greeter.greet:", msg);
-
-/* ---------- 4. Layer.effect — service that depends on other services ----- *
- * Compose: a Logger that prefixes messages with a clock timestamp.
+/* ---------- 4. Layer.effect — implementation with dependencies ----------- *
+ * The `Logger` needs `Clock`. Declare the dependency via `yield* Clock`
+ * inside the implementation Effect; Effect tracks it in the Layer's R.
  */
 
 interface ClockShape {
   readonly now: () => Effect.Effect<number>;
 }
-class Clock extends Context.Service<Clock, ClockShape>()("app/Clock") {}
+class Clock extends Context.Service<Clock, ClockShape>()("app/Clock") {
+  static readonly layer = Layer.succeed(Clock)({
+    now: () => Effect.sync(() => Date.now()),
+  });
 
-const ClockLive = Layer.succeed(Clock)({
-  now: () => Effect.sync(() => Date.now()),
-});
+  static readonly testLayer = Layer.succeed(Clock)({
+    now: () => Effect.succeed(0), // deterministic — time starts at 0
+  });
+}
 
 interface LoggerShape {
   readonly info: (msg: string) => Effect.Effect<void>;
 }
-class Logger extends Context.Service<Logger, LoggerShape>()("app/Logger") {}
+class Logger extends Context.Service<Logger, LoggerShape>()("app/Logger") {
+  static readonly layer = Layer.effect(Logger)(
+    Effect.gen(function* () {
+      const clock = yield* Clock;
+      const info = Effect.fn("Logger.info")(function* (msg: string) {
+        const t = yield* clock.now();
+        console.log(`[${t}] ${msg}`);
+      });
+      return { info };
+    }),
+  );
+}
 
-const LoggerLive = Layer.effect(Logger)(
-  Effect.gen(function* () {
-    const clock = yield* Clock; // Logger depends on Clock
-    return {
-      info: (msg) =>
-        Effect.gen(function* () {
-          const t = yield* clock.now();
-          console.log(`[${t}] ${msg}`);
-        }),
-    };
-  }),
-);
-
-/* ---------- 5. Wire the dependency graph --------------------------------- *
- * Two common primitives:
- *   - Layer.merge(A, B)     → Layer offering A & B (if A and B are peers)
- *   - Layer.provide(X, Y)   → Y's requirements satisfied by X
- *
- * Here: LoggerLive needs Clock → Layer.provide(ClockLive).
+/* ---------- 5. Wire the graph, provide once at the edge ------------------ *
+ * Compose the whole app Layer with Layer.provideMerge so dependencies of
+ * each service are satisfied by a sibling layer. Then `Effect.provide`
+ * ONCE at main() — not inside business logic.
  */
 
-const AppLive = LoggerLive.pipe(Layer.provide(ClockLive));
+const AppLayer = Logger.layer.pipe(Layer.provideMerge(Clock.layer));
 
-const app = Effect.gen(function* () {
+const app = Effect.fn("app")(function* () {
   const log = yield* Logger;
   yield* log.info("Services are wired.");
 });
 
-await Effect.runPromise(app.pipe(Effect.provide(AppLive)));
+await Effect.runPromise(app().pipe(Effect.provide(AppLayer)));
 
-/* ---------- 6. Multiple Layer variants (Production / Development / Mock) -- *
- * A common pattern from tbiz_ts: attach alternate Layers as static fields
- * on the service class. See `PersonService.Development/Production` in
- * `packages/api-client/src/example/context_tag.ts`.
+/* ---------- 6. Layer memoization gotcha ---------------------------------- *
+ * Effect memoizes layers by **reference identity**. If you call a
+ * parameterized layer constructor twice inline, you get two instances —
+ * two connection pools, two caches, two whatever.
+ *
+ * The fix: store parameterized layers in a const, reuse that reference.
  */
 
-class Mailer extends Context.Service<Mailer, {
-  readonly send: (to: string, body: string) => Effect.Effect<string>;
-}>()("app/Mailer") {
-  static Live = Layer.succeed(Mailer)({
-    send: (to, body) =>
-      Effect.succeed(`[PROD] emailed ${to} with ${body.length} bytes`),
-  });
+// Fake "postgres" layer constructor that takes params
+const makePgLayer = (_opts: { url: string; poolSize: number }) =>
+  Layer.succeed(Clock)({ now: () => Effect.succeed(Date.now()) }); // stub
 
-  static Mock = Layer.succeed(Mailer)({
-    send: (to, body) =>
-      Effect.succeed(`[MOCK] would have emailed ${to} / ${body}`),
-  });
+// ❌ BAD — two separate instances, even with identical params
+const badLayer = Layer.mergeAll(
+  Logger.layer.pipe(Layer.provide(makePgLayer({ url: "u", poolSize: 10 }))),
+  Logger.layer.pipe(Layer.provide(makePgLayer({ url: "u", poolSize: 10 }))),
+);
+void badLayer;
+
+// ✅ GOOD — single reference reused
+const pgLayer = makePgLayer({ url: "u", poolSize: 10 });
+const goodLayer = Layer.mergeAll(
+  Logger.layer.pipe(Layer.provide(pgLayer)),
+  Logger.layer.pipe(Layer.provide(pgLayer)),
+);
+void goodLayer;
+
+console.log("6) layer memoization — see comments");
+
+/* ---------- 7. Service-driven development sketch ------------------------- *
+ * Sketch leaf tags across the graph (no impls yet). Write orchestration
+ * on top. The code type-checks immediately — infra comes later.
+ */
+
+interface UsersShape {
+  readonly findById: (id: string) => Effect.Effect<{ id: string; email: string }>;
+}
+class Users extends Context.Service<Users, UsersShape>()("app/Users") {}
+
+interface EmailsShape {
+  readonly send: (to: string, body: string) => Effect.Effect<void>;
+}
+class Emails extends Context.Service<Emails, EmailsShape>()("app/Emails") {}
+
+// Higher-level service, written *before* Users/Emails have implementations:
+class Notifier extends Context.Service<Notifier, {
+  readonly welcome: (userId: string) => Effect.Effect<void>;
+}>()("app/Notifier") {
+  static readonly layer = Layer.effect(Notifier)(
+    Effect.gen(function* () {
+      const users = yield* Users;
+      const emails = yield* Emails;
+
+      const welcome = Effect.fn("Notifier.welcome")(function* (userId: string) {
+        const u = yield* users.findById(userId);
+        yield* emails.send(u.email, `Welcome, ${u.id}!`);
+      });
+
+      return { welcome };
+    }),
+  );
 }
 
-const sendSomething = Effect.gen(function* () {
-  const m = yield* Mailer;
-  return yield* m.send("you@example.com", "hello");
-});
-
-console.log("6a)", await Effect.runPromise(sendSomething.pipe(Effect.provide(Mailer.Live))));
-console.log("6b)", await Effect.runPromise(sendSomething.pipe(Effect.provide(Mailer.Mock))));
+// Add impls later — Notifier never changes.
+void Notifier;
 
 /* ---------- Key takeaways ------------------------------------------------- *
- *   Context.Service<Self, Shape>()("id")   — the tag (was ServiceMap in beta.31)
- *   Layer.succeed(Tag)(impl)               — curried!
- *   Layer.effect(Tag)(Effect.gen(...))     — curried!
- *   yield* Tag                             — only inside Effect.gen
- *   Layer.merge, Layer.provide, Layer.mergeAll — compose layers
+ *   Context.Service<Self, Shape>()("id")  — tag
+ *   static readonly layer / testLayer     — canonical layer names
+ *   Effect.fn("Svc.method")(function*()   — traced, named methods
+ *   Layer.succeed / Layer.effect          — curried in v4
+ *   Layer.provide / Layer.provideMerge    — wire the graph
+ *   Effect.provide ONCE at the edge
+ *   Parameterized layers: store once, reuse the const
+ *   Sketch leaf tags first; implementations come later
  */
