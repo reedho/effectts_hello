@@ -11,29 +11,29 @@
  * Run: `bun stories/08-managed-runtime.ts`
  */
 
-import { Cause, Context, Data, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
+import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Option, Schema } from "effect";
 
 /* ---------- 1. Define a service + a domain error ------------------------- */
 
-class NotFound extends Data.TaggedError("NotFound")<{
-  readonly id: string;
-}> {}
+class NotFound extends Schema.TaggedErrorClass<NotFound>()("NotFound", {
+  id: Schema.String,
+}) {}
 
 interface UsersShape {
   readonly get: (id: string) => Effect.Effect<{ id: string; name: string }, NotFound>;
 }
-class Users extends Context.Service<Users, UsersShape>()("app/Users") {}
-
-const UsersLive = Layer.succeed(Users)({
-  get: (id) =>
-    id === "1"
-      ? Effect.succeed({ id, name: "Ridho" })
-      : Effect.fail(new NotFound({ id })),
-});
+class Users extends Context.Service<Users, UsersShape>()("app/Users") {
+  static readonly layer = Layer.succeed(Users)({
+    get: (id) =>
+      id === "1"
+        ? Effect.succeed({ id, name: "Ridho" })
+        : Effect.fail(new NotFound({ id })),
+  });
+}
 
 /* ---------- 2. Build the runtime once, reuse everywhere ------------------ */
 
-const runtime = ManagedRuntime.make(UsersLive);
+const runtime = ManagedRuntime.make(Users.layer);
 
 /* ---------- 3. runPromise — unwrap happy-path as a Promise --------------- */
 

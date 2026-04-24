@@ -15,7 +15,7 @@
  * Run: `bun stories/09-jsonrpc-schema-factory.ts`
  */
 
-import { Data, Effect, Layer, pipe, Schema } from "effect";
+import { Effect, Layer, pipe, Schema } from "effect";
 import type { HttpClientResponse } from "effect/unstable/http";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
@@ -57,15 +57,15 @@ const GetUserEnvelope = JsonRpcResponse(GetUserResult);
 
 /* ---------- 3. Domain error + RPC client --------------------------------- */
 
-class RpcError extends Data.TaggedError("RpcError")<{
-  readonly code: number;
-  readonly message: string;
-}> {}
+class RpcError extends Schema.TaggedErrorClass<RpcError>()("RpcError", {
+  code: Schema.Number,
+  message: Schema.String,
+}) {}
 
-class ParseError extends Data.TaggedError("ParseError")<{
-  readonly message: string;
-  readonly cause: unknown;
-}> {}
+class ParseError extends Schema.TaggedErrorClass<ParseError>()("ParseError", {
+  message: Schema.String,
+  cause: Schema.Defect,
+}) {}
 
 let nextId = 0;
 
@@ -97,9 +97,13 @@ const rpcCall = <R extends Schema.Top>(method: string, params: unknown, result: 
     });
 
     if ("error" in envelope) {
-      return yield* Effect.fail(
-        new RpcError({ code: envelope.error.code, message: envelope.error.message }),
-      );
+      // TaggedErrorClass values are yieldable. `return yield*` on an error
+      // branch keeps the narrowing clean for both TypeScript and the
+      // Effect language-service.
+      return yield* new RpcError({
+        code: envelope.error.code,
+        message: envelope.error.message,
+      });
     }
     return envelope.result;
   }).pipe(

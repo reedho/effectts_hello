@@ -1,16 +1,22 @@
 /**
  * 11 — Testing Effect code with bun:test.
  *
- * tbiz_ts uses vitest, but the assertions are identical — the test bodies
- * port over one-to-one. The key idiom: **schema tests use `decodeUnknownExit`
- * and assert on `Exit.isSuccess` / `Exit.isFailure`**, just like
- * `packages/api-client/src/__tests__/insurance.test.ts`.
+ * **Tooling note.** effect-solutions recommends `@effect/vitest` for Effect
+ * tests — it gives you `it.effect`, `TestClock`, `TestRandom`, auto-scope
+ * cleanup, and `it.layer` for suite-shared layers. None of that is
+ * available in `bun:test`. This project uses `bun:test` because the
+ * CLAUDE.md mandate says to — the patterns below are the closest
+ * equivalents. When your tests need test time or scoped resources, add
+ * `@effect/vitest` as a project exception.
+ *
+ * The canonical test shape is unchanged either way: decode with
+ * `decodeUnknownExit`, assert with `Exit.isSuccess/isFailure`.
  *
  * Run: `bun test stories/11-testing.test.ts`
  */
 
 import { expect, test, describe } from "bun:test";
-import { Cause, Context, Data, Effect, Exit, Layer, ManagedRuntime, Option, Schema } from "effect";
+import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Option, Schema } from "effect";
 
 /* ========================================================================= */
 /* Schema tests                                                              */
@@ -57,29 +63,30 @@ describe("Country schema", () => {
 });
 
 /* ========================================================================= */
-/* Effect tests — running an Effect program against a test Layer             */
+/* Effect tests — running an Effect program against a testLayer              */
 /* ========================================================================= */
 
-class NotFound extends Data.TaggedError("NotFound")<{
-  readonly id: string;
-}> {}
+class NotFound extends Schema.TaggedErrorClass<NotFound>()("NotFound", {
+  id: Schema.String,
+}) {}
 
 interface UsersShape {
   readonly get: (id: string) => Effect.Effect<{ id: string; name: string }, NotFound>;
 }
-class Users extends Context.Service<Users, UsersShape>()("test/Users") {}
-
-const makeUsersLayer = (db: Record<string, string>) =>
-  Layer.succeed(Users)({
-    get: (id) =>
-      db[id]
-        ? Effect.succeed({ id, name: db[id] as string })
-        : Effect.fail(new NotFound({ id })),
-  });
+class Users extends Context.Service<Users, UsersShape>()("test/Users") {
+  // Helper for building a test-specific layer — effect-solutions convention.
+  static readonly makeTestLayer = (db: Record<string, string>) =>
+    Layer.succeed(Users)({
+      get: (id) =>
+        db[id]
+          ? Effect.succeed({ id, name: db[id] as string })
+          : Effect.fail(new NotFound({ id })),
+    });
+}
 
 describe("Users service", () => {
   test("returns a user when it exists", async () => {
-    const runtime = ManagedRuntime.make(makeUsersLayer({ "1": "Ridho" }));
+    const runtime = ManagedRuntime.make(Users.makeTestLayer({ "1": "Ridho" }));
 
     const result = await runtime.runPromise(
       Effect.gen(function* () {
@@ -93,7 +100,7 @@ describe("Users service", () => {
   });
 
   test("fails with a typed NotFound", async () => {
-    const runtime = ManagedRuntime.make(makeUsersLayer({}));
+    const runtime = ManagedRuntime.make(Users.makeTestLayer({}));
 
     const exit = await runtime.runPromiseExit(
       Effect.gen(function* () {
