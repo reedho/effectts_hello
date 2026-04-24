@@ -1,141 +1,190 @@
 /**
  * 02 — Schema data modeling.
  *
- * Schema is Effect's codec/validator library. A `Schema<T>` value is both:
+ * Schema is Effect's codec/validator library. One schema gives you:
  *   - a runtime validator (`decodeUnknownSync(schema)(input)`)
- *   - a TypeScript type (`Schema.Schema.Type<typeof schema>`)
+ *   - a TypeScript type (`typeof schema.Type`)
+ *   - JSON serialization
  *
- * v4 tightened the API — notice the **array** form for `Union`, `Tuple`, and
- * the **array** form for multi-value `Literals` (singular `Literal` stays
- * for single-value). See EFFECT_V4_MIGRATION.md §3.
+ * The effect-solutions recommendation: reach for **Schema.Class** for
+ * composite records (you can hang methods off them), **Schema.TaggedClass**
+ * for tagged variants, and brand **nearly every** domain primitive — not
+ * just IDs, but emails, ports, URLs, percentages, etc.
+ *
+ * v4 trap: `Union`, `Tuple`, and multi-value `Literals` all take **array
+ * form** now — trips every v3 port. See EFFECT_V4_MIGRATION.md §3.
  *
  * Run: `bun stories/02-schema-data-modeling.ts`
  * Real-world reference: `tbiz_ts/packages/schema/src/trip.ts`, `hotel.ts`
  */
 
-import { Schema } from "effect";
+import { Effect, Match, Schema } from "effect";
 
-/* ---------- 1. Struct — the canonical product type ----------------------- */
+/* ---------- 1. Brand nearly every primitive ------------------------------ *
+ * Branded types prevent you from mixing values that look identical at the
+ * type level but carry different meaning. In a healthy domain model you'll
+ * have dozens of these.
+ */
 
-const Price = Schema.Struct({
-  amount: Schema.Number,
-  currency: Schema.String,
+export const UserId = Schema.String.pipe(Schema.brand("UserId"));
+export type UserId = typeof UserId.Type;
+
+export const PostId = Schema.String.pipe(Schema.brand("PostId"));
+export type PostId = typeof PostId.Type;
+
+export const Email = Schema.String.pipe(
+  Schema.check(Schema.isPattern(/.+@.+\..+/, { message: "invalid email" })),
+  Schema.brand("Email"),
+);
+export type Email = typeof Email.Type;
+
+export const Port = Schema.Int.pipe(
+  Schema.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
+  Schema.brand("Port"),
+);
+export type Port = typeof Port.Type;
+
+// Construct branded values by decoding — this runs the checks + brands in
+// one step. (Later betas add `Schema.make`/`makeUnsafe` constructors on
+// branded schemas; in beta.57 decode is the portable path.)
+const u1: UserId = Schema.decodeUnknownSync(UserId)("user-123");
+const p1: Port = Schema.decodeUnknownSync(Port)(8080);
+console.log("1) branded:", { u1, p1 });
+
+/* ---------- 2. Schema.Class — records with methods ----------------------- *
+ * Unlike Schema.Struct (anonymous record), Schema.Class gives you a real
+ * class you can extend with getters and methods. Recommended default for
+ * composite domain types.
+ */
+
+class User extends Schema.Class<User>("User")({
+  id: UserId,
+  name: Schema.String,
+  email: Email,
+  // `Schema.Date` is an instance-of check — expects a real Date at the Type
+  // level. For API payloads (ISO strings) you'd typically use `Schema.String`
+  // or a string→Date codec; we use an ISO string here for JSON-friendliness.
+  createdAt: Schema.String,
+}) {
+  // Instance methods — just like a regular class
+  get displayName() {
+    return `${this.name} <${this.email}>`;
+  }
+}
+
+const alice = new User({
+  id: Schema.decodeUnknownSync(UserId)("u-1"),
+  name: "Alice",
+  email: Schema.decodeUnknownSync(Email)("alice@example.com"),
+  createdAt: new Date().toISOString(),
 });
-type Price = Schema.Schema.Type<typeof Price>;
-//   ^?  { readonly amount: number; readonly currency: string }
+console.log("2) User class:", alice.displayName);
 
-console.log("1) Price type derived from schema — sample:", {
-  amount: 100,
-  currency: "IDR",
-} satisfies Price);
-
-/* ---------- 2. Literals (multi) vs Literal (single) ---------------------- *
- * v3's variadic `Schema.Literal("a","b","c")` became `Schema.Literals([..])`.
- * This trips a lot of people migrating. Single-value `Schema.Literal("x")`
- * is unchanged.
+/* ---------- 3. Schema.TaggedClass — structured variants ------------------ *
+ * For sum types ("Result is Success OR Failure"), pair Schema.TaggedClass
+ * with Schema.Union. Each variant gets a literal `_tag` so pattern
+ * matching stays exhaustive.
  */
 
-const TripPurpose = Schema.Literals(["DINAS", "TRAINING", "CONFERENCE", "OTHER"]);
-type TripPurpose = Schema.Schema.Type<typeof TripPurpose>;
-//   ^? "DINAS" | "TRAINING" | "CONFERENCE" | "OTHER"
+class PaymentSucceeded extends Schema.TaggedClass<PaymentSucceeded>("PaymentSucceeded")(
+  "PaymentSucceeded",
+  { transactionId: Schema.String, amount: Schema.Number },
+) {}
 
-const JsonRpcVersion = Schema.Literal("2.0"); // single value — old API stays
-type JsonRpcVersion = Schema.Schema.Type<typeof JsonRpcVersion>;
-//   ^? "2.0"
+class PaymentFailed extends Schema.TaggedClass<PaymentFailed>("PaymentFailed")(
+  "PaymentFailed",
+  { reason: Schema.String, retryable: Schema.Boolean },
+) {}
 
-/* ---------- 3. Union / Tuple / Record — all **array** form in v4 --------- */
+const PaymentResult = Schema.Union([PaymentSucceeded, PaymentFailed]);
+type PaymentResult = typeof PaymentResult.Type;
 
-const Id = Schema.Union([Schema.String, Schema.Number]); // not Union(A, B)
-type Id = Schema.Schema.Type<typeof Id>;
+// Match.valueTags — exhaustive pattern match keyed on `_tag`.
+const describe = (r: PaymentResult) =>
+  Match.valueTags(r, {
+    PaymentSucceeded: ({ transactionId, amount }) => `OK ${transactionId} ($${amount})`,
+    PaymentFailed: ({ reason, retryable }) =>
+      retryable ? `retry: ${reason}` : `abort: ${reason}`,
+  });
 
-const Coord = Schema.Tuple([Schema.Number, Schema.Number]); // not Tuple(A, B)
-type Coord = Schema.Schema.Type<typeof Coord>;
-//   ^? readonly [number, number]
+console.log("3a)", describe(new PaymentSucceeded({ transactionId: "tx-1", amount: 42 })));
+console.log("3b)", describe(new PaymentFailed({ reason: "declined", retryable: false })));
 
-// Record takes positional (key, value) args in v4
-const Env = Schema.Record(Schema.String, Schema.String);
-type Env = Schema.Schema.Type<typeof Env>;
+/* ---------- 4. The v4 primitives you'll hit most ------------------------- */
 
-/* ---------- 4. Optional fields ------------------------------------------- *
- * `Schema.optional(X)` makes a field undefined-able. For a **default value**,
- * see story 03 (withDecodingDefault).
- */
+const TripPurpose = Schema.Literals([
+  "DINAS",
+  "TRAINING",
+  "CONFERENCE",
+  "OTHER",
+]); // multi-value → array form
+const JsonRpcVersion = Schema.Literal("2.0"); // single → unchanged
+type TripPurpose = typeof TripPurpose.Type;
 
-const TripPax = Schema.Struct({
-  id: Schema.String,
-  title: Schema.Literals(["Mr", "Mrs", "Ms"]),
-  firstName: Schema.String,
-  lastName: Schema.String,
-  // optional fields
-  idType: Schema.optional(Schema.Literals(["KTP", "PASSPORT"])),
-  phone: Schema.optional(Schema.String),
-});
+const Id = Schema.Union([Schema.String, Schema.Number]); // Union → array form
+const Coord = Schema.Tuple([Schema.Number, Schema.Number]); // Tuple → array form
+const Env = Schema.Record(Schema.String, Schema.String); // Record → (K, V)
+void JsonRpcVersion; void Id; void Coord; void Env;
 
-/* ---------- 5. NullOr vs optional ---------------------------------------- *
- * `NullOr(X)` allows `null`; `optional(X)` allows the key to be missing.
- * APIs often use both independently: `holderEmail: Schema.NullOr(Schema.String)`.
- */
+/* ---------- 5. optional vs NullOr, readonly arrays ----------------------- */
 
-const HolderContact = Schema.Struct({
-  email: Schema.NullOr(Schema.String),            // null allowed, field required
+const Contact = Schema.Struct({
+  email: Schema.NullOr(Email),                       // null allowed, key required
   phone: Schema.optional(Schema.NullOr(Schema.String)), // null OR missing
 });
 
-/* ---------- 6. Arrays (readonly!) ---------------------------------------- *
- * `Schema.Array(X)` produces a **readonly** array type. Component props
- * consuming schema-derived data must type params as `readonly T[]`.
- */
+const Passengers = Schema.Array(User);
+// ^? readonly User[]  — component props consuming this must use `readonly`
+void Contact; void Passengers;
 
-const Passengers = Schema.Array(TripPax);
-type Passengers = Schema.Schema.Type<typeof Passengers>;
-//   ^? readonly TripPax[]
+/* ---------- 6. Composing — a small domain model -------------------------- */
 
-/* ---------- 7. Brands — type-safe opaque strings/numbers ----------------- */
-
-const UserId = Schema.String.pipe(Schema.brand("UserId"));
-type UserId = Schema.Schema.Type<typeof UserId>;
-//   ^? string & Brand<"UserId">
-
-const OrgId = Schema.String.pipe(Schema.brand("OrgId"));
-type OrgId = Schema.Schema.Type<typeof OrgId>;
-
-// UserId and OrgId are NOT assignable to each other at compile time,
-// despite both being `string` at runtime.
-
-/* ---------- 8. Composing — the tbiz_ts Trip schema (simplified) ---------- */
-
-const Trip = Schema.Struct({
-  id: UserId,
+class Trip extends Schema.Class<Trip>("Trip")({
+  id: UserId,                 // (re-using UserId for brevity — would be a real brand)
   title: Schema.String,
   purpose: TripPurpose,
   departureDate: Schema.String,
   passengers: Passengers,
-  estimatedBudget: Schema.optional(Schema.Number),
   currency: Schema.String,
-});
-type Trip = Schema.Schema.Type<typeof Trip>;
+}) {}
 
-const sampleTrip: Trip = {
-  id: "user-1" as UserId,
+const trip = new Trip({
+  id: Schema.decodeUnknownSync(UserId)("u-1"),
   title: "Jakarta → Tokyo",
   purpose: "DINAS",
   departureDate: "2026-05-01",
-  passengers: [
-    { id: "p1", title: "Mr", firstName: "Ridho", lastName: "R" },
-  ],
+  passengers: [alice],
   currency: "IDR",
-};
+});
+console.log("6) trip title:", trip.title, "| passengers:", trip.passengers.length);
 
-console.log("8) Sample trip:", sampleTrip);
+/* ---------- 7. JSON in one step with Schema.fromJsonString --------------- *
+ * Combines `JSON.parse` + decode (or `JSON.stringify` + encode) into a
+ * single Schema — the *codec* approach rather than parse-then-decode.
+ */
+
+const UserFromJson = Schema.fromJsonString(User);
+
+const decoded = await Effect.runPromise(
+  Schema.decodeUnknownEffect(UserFromJson)(
+    JSON.stringify({
+      id: "u-2",
+      name: "Bob",
+      email: "bob@example.com",
+      createdAt: new Date().toISOString(),
+    }),
+  ),
+);
+console.log("7) fromJsonString decoded:", decoded.displayName);
 
 /* ---------- Key takeaways ------------------------------------------------- *
- *  Struct  → product type
- *  Literals([...])  (array)  — NOT `Literal("a","b")`
- *  Union([...])     (array)
- *  Tuple([...])     (array)
- *  Record(K, V)     (positional)
- *  optional(X)      — key may be missing
- *  NullOr(X)        — value may be null
- *  Array(X)         — readonly
- *  brand("Name")    — nominal types
+ *  Schema.Class<Self>("Name")({...})       — records w/ methods (default)
+ *  Schema.TaggedClass<Self>("Tag")("Tag", {...})  — tagged variants
+ *  Schema.Union([V1, V2])                  — sum of tagged classes
+ *  Match.valueTags(value, {Tag: ...})      — exhaustive pattern match
+ *  Schema.brand("Name")                    — brand every domain primitive
+ *  Schema.fromJsonString(S)                — JSON codec in one step
+ *  Array-form: Union([]), Tuple([]), Literals([]) — v4 surprise
+ *  optional → key; NullOr → value
+ *  Schema.Array(X) → readonly T[]
  */
