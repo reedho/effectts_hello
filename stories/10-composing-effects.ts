@@ -108,14 +108,54 @@ const retried = pipe(
 
 console.log("5) retry:", await Effect.runPromise(retried));
 
-/* ---------- 6. pipe vs Effect.gen — when to use which -------------------- *
+/* ---------- 6. Effect.fn — the production sweet-spot --------------------- *
+ * The effect-solutions recommendation for any function that returns an
+ * Effect: wrap it in `Effect.fn("Name")(function* (args) { ... })`. You
+ * get:
+ *   - a telemetry span named "Name"
+ *   - a call-site trace (stack shows where it was *invoked*)
+ *   - cleaner signatures than Effect.gen at the top level
+ *
+ * The `Effect.fn` two-arg form accepts an "instrumentation pipeline" as
+ * the second argument — clean way to attach retry/timeout/span without
+ * nesting the body.
+ */
+
+const fetchFlaky = Effect.fn("fetchFlaky")(
+  function* (url: string) {
+    yield* Effect.sleep(Duration.millis(5));
+    return { url, ok: true };
+  },
+  // Cross-cutting: every invocation retries + times out
+  (self) =>
+    self.pipe(
+      Effect.timeout(Duration.seconds(2)),
+      Effect.retry(Schedule.recurs(3)),
+    ),
+);
+
+console.log("6) Effect.fn with instrumentation:", await Effect.runPromise(fetchFlaky("/x")));
+
+/* ---------- 7. pipe vs Effect.gen — when to use which -------------------- *
  * `Effect.gen` reads like imperative code and is easiest for sequencing
  * that uses intermediate values.
  *
  * `pipe` reads like a data pipeline and shines when you're decorating a
  * single value with `.map` / `.catchTag` / `.tap` / `.retry`.
  *
- * Teams usually: Effect.gen for the body of a function, then pipe on the
- * outside to attach cross-cutting behavior (catch, retry, provide, tap).
- * See pegasus.ts / rpc-client/client.ts for this exact split.
+ * `Effect.fn("name")(function* () { ... }, flow(...))` — the best of both:
+ * generator body + instrumentation pipeline, with a span attached.
+ *
+ * Teams usually: Effect.fn for named service methods, plain Effect.gen
+ * for anonymous blocks, and pipe on the outside to attach cross-cutting
+ * behavior (catch, retry, provide, tap). See pegasus.ts /
+ * rpc-client/client.ts for the split applied to HTTP clients.
  */
+
+/* ---------- 8. Effect.withSpan — ad-hoc spans ---------------------------- */
+
+const spanned = pipe(
+  fetchUser,
+  Effect.withSpan("spanned-fetch", { attributes: { why: "demo" } }),
+);
+void spanned;

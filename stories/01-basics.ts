@@ -84,7 +84,26 @@ console.log("5) try + tryPromise:", await Effect.runPromise(program));
 
 /* ---------- 6. Why `yield*` instead of `pipe + flatMap`? ------------------ *
  *
- * In v4, `ServiceMap.Service` tags are **not** Effect values. You can't write
+ * In v4, service tags (Context.Service — called ServiceMap.Service in older
+ * betas) are **not** Effect values. You can't write
  * `pipe(MyService, Effect.flatMap(...))`. You *must* use `yield* MyService`
  * inside Effect.gen. See EFFECT_V4_MIGRATION.md §2.
  */
+
+/* ---------- 7. Effect.fn — named, traced effectful functions ------------- *
+ * effect-solutions recommends using `Effect.fn("Name")(function* () { ... })`
+ * for any Effect-returning function you'd otherwise declare with a plain
+ * arrow. Benefits:
+ *   - Call-site trace (knows where the function was *invoked* from)
+ *   - A telemetry span named "Name" (great for OpenTelemetry)
+ *   - Cleaner signature — no explicit `Effect.gen(function*…)` wrapper
+ *
+ * You'll see this all over the later stories for service methods.
+ */
+
+const loadUser = Effect.fn("loadUser")(function* (id: string) {
+  yield* Effect.sleep("10 millis");
+  return { id, name: "Ridho" };
+});
+
+console.log("7) Effect.fn:", await Effect.runPromise(loadUser("u-1")));
