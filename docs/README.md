@@ -26,3 +26,5 @@ bun test stories/11-testing.test.ts
 ## Version note
 
 These tutorials target `effect@4.0.0-beta.57` (effect-smol, which consolidated `@effect/platform` into core). The reference source — `tbiz_ts` — was written against `effect@4.0.0-beta.31`. The user-facing API is 95% identical; the handful of v4.31 → v4.57 differences are called out inline where they matter.
+
+For a curated, brief summary of what changed in each beta release relevant to these tutorials, see [`EFFECT_CHANGELOG.md`](./EFFECT_CHANGELOG.md).
