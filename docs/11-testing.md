@@ -5,28 +5,40 @@
 
 ## Toolchain decision
 
-effect-solutions recommends **`@effect/vitest`** for Effect tests. It gives you:
+This project runs **two test runners**, picked by what's under test:
 
-- `it.effect(...)` — auto-runs Effects and auto-provides `TestContext`
+| Use case                                | Runner            | Command            | File suffix       |
+| --------------------------------------- | ----------------- | ------------------ | ----------------- |
+| Effect programs (services, layers, etc) | `@effect/vitest`  | `bun run test`     | `*.test.ts`       |
+| Plain unit tests / utilities / shapes   | `bun:test`        | `bun run test:bun` | `*.bun.test.ts`   |
+
+`@effect/vitest` is what effect-solutions recommends for Effect code:
+
+- `it.effect(...)` — auto-runs Effects, auto-provides `TestContext`
 - `TestClock` / `TestRandom` for deterministic time/randomness
 - `it.live(...)` for real-time tests
 - `it.layer(...)` for suite-shared layers (expensive shared resources)
-- Automatic scope cleanup
+- Automatic `Scope` cleanup
 - Detailed fiber dumps on failure
 
-This project uses **`bun:test`** because CLAUDE.md requires it. You lose the above. For simple tests it doesn't matter; if you need deterministic time or scope cleanup, add `@effect/vitest` as a project exception and co-locate its tests separately.
+`bun:test` is kept for non-Effect tests because it's fast, zero-config, and
+matches the project's Bun-first ethos. The two runners coexist via the
+`vitest.config.ts` exclude rule (`*.bun.test.ts` is reserved for bun:test).
 
-The **canonical assertion shape is identical** in either tool. The examples below port one-to-one.
+The **canonical assertion shape** for schemas is the same in either tool:
+decode with `decodeUnknownExit`, assert on `Exit.isSuccess` /
+`Exit.isFailure`.
 
 ## Schema tests
 
-Assert on `Exit.isSuccess` / `Exit.isFailure`. Don't wrap `decodeUnknownSync` in try/catch:
+Pure decode — no Effect runtime needed. Plain `it(...)` is fine:
 
 ```ts
+import { describe, expect, it } from "@effect/vitest"
 import { Exit, Schema } from "effect"
 
 describe("Country schema", () => {
-  test("accepts well-formed payload", () => {
+  it("accepts well-formed payload", () => {
     const exit = Schema.decodeUnknownExit(Country)({
       alpha2Code: "ID",
       countrySid: "1001",
@@ -34,7 +46,7 @@ describe("Country schema", () => {
     expect(Exit.isSuccess(exit)).toBe(true)
   })
 
-  test("rejects too-short alpha2 code", () => {
+  it("rejects too-short alpha2 code", () => {
     const exit = Schema.decodeUnknownExit(Country)({
       alpha2Code: "X",
       countrySid: "1001",
@@ -54,18 +66,23 @@ if (Exit.isSuccess(exit)) {
 }
 ```
 
-## Effect tests — run against a test layer
+## Effect tests — `it.effect` + `Effect.provide`
 
 Pattern:
 
-1. Construct a test-specific layer (hardcoded data, in-memory store, whatever).
-2. Build a `ManagedRuntime` from it.
-3. Run with `runPromise` (happy) or `runPromiseExit` (error assertions).
-4. Dispose in cleanup.
+1. Define a test-specific layer (hardcoded data, in-memory store, whatever).
+2. Write the test body as an Effect via `it.effect("name", () => Effect.gen(...))`.
+3. Provide dependencies inline with `.pipe(Effect.provide(layer))`.
+4. Done — no `ManagedRuntime`, no `runPromise`, no `dispose`.
 
-The effect-solutions convention for test layers: expose a `testLayer` static on the service class, or a `makeTestLayer(seed)` helper when you need parameterization.
+The effect-solutions convention for test layers: expose a `testLayer` static
+on the service class, or a `makeTestLayer(seed)` helper when you need
+parameterization.
 
 ```ts
+import { describe, expect, it } from "@effect/vitest"
+import { Context, Effect, Layer, Schema } from "effect"
+
 class NotFound extends Schema.TaggedErrorClass<NotFound>()("NotFound", {
   id: Schema.String,
 }) {}
@@ -80,72 +97,88 @@ class Users extends Context.Service<Users, UsersShape>()("test/Users") {
     })
 }
 
-test("returns a user when it exists", async () => {
-  const runtime = ManagedRuntime.make(Users.makeTestLayer({ "1": "Ridho" }))
-
-  const result = await runtime.runPromise(
-    Effect.gen(function* () {
-      const users = yield* Users
-      return yield* users.get("1")
-    }),
-  )
-
-  expect(result).toEqual({ id: "1", name: "Ridho" })
-  await runtime.dispose()
-})
+it.effect("returns a user when it exists", () =>
+  Effect.gen(function* () {
+    const users = yield* Users
+    const user = yield* users.get("1")
+    expect(user).toEqual({ id: "1", name: "Ridho" })
+  }).pipe(Effect.provide(Users.makeTestLayer({ "1": "Ridho" }))),
+)
 ```
 
 ## Asserting on typed errors
 
+Use `Effect.exit(...)` to capture the failure as an `Exit`, then narrow:
+
 ```ts
-test("fails with a typed NotFound", async () => {
-  const runtime = ManagedRuntime.make(Users.makeTestLayer({}))
+it.effect("fails with a typed NotFound", () =>
+  Effect.gen(function* () {
+    const users = yield* Users
+    const exit = yield* Effect.exit(users.get("missing"))
 
-  const exit = await runtime.runPromiseExit(
-    Effect.gen(function* () {
-      const users = yield* Users
-      return yield* users.get("missing")
-    }),
-  )
-
-  expect(Exit.isFailure(exit)).toBe(true)
-  if (Exit.isFailure(exit)) {
-    const err = Cause.findErrorOption(exit.cause)
-    expect(Option.isSome(err)).toBe(true)
-    if (Option.isSome(err)) {
-      expect(err.value._tag).toBe("NotFound")
-      expect(err.value.id).toBe("missing")
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      const err = Cause.findErrorOption(exit.cause)
+      expect(Option.isSome(err)).toBe(true)
+      if (Option.isSome(err)) {
+        expect(err.value._tag).toBe("NotFound")
+        expect(err.value.id).toBe("missing")
+      }
     }
-  }
-
-  await runtime.dispose()
-})
+  }).pipe(Effect.provide(Users.makeTestLayer({}))),
+)
 ```
 
-## What `@effect/vitest` would add
+## Suite-shared layers — `it.layer`
 
-For comparison, the same tests under `@effect/vitest` look like:
+When a layer is expensive (database, container, real HTTP server) and you
+want a single instance across a `describe` block, hoist it with `it.layer`:
 
 ```ts
-import { describe, expect, it } from "@effect/vitest"
+const expensiveLayer = Layer.scoped(...)
 
-describe("Users service", () => {
-  it.effect("returns a user", () =>
-    Effect.gen(function* () {
-      const users = yield* Users
-      expect(yield* users.get("1")).toEqual({ id: "1", name: "Ridho" })
-    }).pipe(Effect.provide(Users.makeTestLayer({ "1": "Ridho" })))
-  )
+describe("DB suite", () => {
+  it.layer(expensiveLayer)(({ it }) => {
+    it.effect("does the thing", () =>
+      Effect.gen(function* () { ... })
+    )
+  })
 })
 ```
 
-Key differences:
+## TestClock — deterministic time
 
-- No `runPromise` / `dispose` calls — handled for you.
-- `it.effect` auto-provides `TestClock`, `TestRandom`, scopes.
-- Deterministic time: `yield* TestClock.adjust("10 seconds")` instead of real `setTimeout`.
+`it.effect` automatically provides `TestContext`, which includes a
+`TestClock` that starts at `0`:
 
-If you hit a test that needs `TestClock` or scoped cleanup under `bun:test`, it's a signal to bring in `@effect/vitest` — you'll end up re-implementing its surface otherwise.
+```ts
+import { TestClock } from "effect/testing"
+
+it.effect("delays resolve via TestClock", () =>
+  Effect.gen(function* () {
+    const fiber = yield* Effect.delay(Effect.succeed("done"), "10 seconds").pipe(
+      Effect.forkChild,
+    )
+    yield* TestClock.adjust("10 seconds")
+    const result = yield* Fiber.join(fiber)
+    expect(result).toBe("done")
+  }),
+)
+```
+
+For real-clock tests, switch to `it.live(...)`.
+
+## When to fall back to `bun:test`
+
+Use `bun:test` (file suffix `*.bun.test.ts`) for:
+
+- Pure-function unit tests with no Effect involvement
+- Snapshot/data-shape assertions where pulling in vitest is overkill
+- Bun-specific APIs (e.g. `bun:sqlite` integration probes)
+
+Anything that calls `runPromise`, `runSync`, or builds a `ManagedRuntime`
+should be written under `@effect/vitest` instead — that runner handles all
+of it for you.
 
 ## Helper ideas
 
@@ -165,24 +198,12 @@ function expectTagged<E extends { _tag: string }>(
   }
   return err.value
 }
-
-// Run an Effect against a layer and await the Exit
-async function runExit<R, A, E>(
-  layer: Layer.Layer<R, never, never>,
-  effect: Effect.Effect<A, E, R>,
-): Promise<Exit.Exit<A, E>> {
-  const rt = ManagedRuntime.make(layer)
-  try {
-    return await rt.runPromiseExit(effect)
-  } finally {
-    await rt.dispose()
-  }
-}
 ```
 
 ## Takeaways
 
-- `decodeUnknownExit` + `Exit.isSuccess/isFailure` is the schema test shape.
-- For Effect programs: build a test layer, ManagedRuntime, run, assert, dispose.
-- `runPromiseExit` + `Cause.findErrorOption` for typed-error assertions.
-- If tests need `TestClock` or auto-scope, reach for `@effect/vitest` — `bun:test` can't express those.
+- `@effect/vitest` is the default for Effect tests — `it.effect` + `Effect.provide`.
+- `bun:test` (with the `*.bun.test.ts` suffix) is kept for plain unit tests.
+- `decodeUnknownExit` + `Exit.isSuccess/isFailure` is the schema test shape, in either runner.
+- For typed-error assertions inside `it.effect`, lift to an `Exit` with `Effect.exit(...)`, then `Cause.findErrorOption`.
+- Reach for `it.layer` (suite-shared layers) and `TestClock` (deterministic time) when you need them — both come for free with `@effect/vitest`.

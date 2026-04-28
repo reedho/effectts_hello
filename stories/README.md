@@ -11,7 +11,8 @@ Each story is **self-contained** and **runnable** with Bun — no monorepo, no e
 bun stories/01-basics.ts
 bun stories/02-schema-data-modeling.ts
 # ...
-bun test stories/11-testing.test.ts
+bun run test stories/11-testing.test.ts   # vitest (Effect tests)
+bun run test:bun                          # bun:test (plain unit tests, *.bun.test.ts)
 ```
 
 Typecheck everything:
@@ -34,7 +35,7 @@ bun run typecheck
 | 08 | `08-managed-runtime.ts`                | `ManagedRuntime.make`, `runPromiseExit`, `Exit.match`, `Cause.findErrorOption` |
 | 09 | `09-jsonrpc-schema-factory.ts`         | Generic `Schema.Top` factories (JSON-RPC envelope) + mocked `HttpClient` layer |
 | 10 | `10-composing-effects.ts`              | `Effect.cachedWithTTL`, `Effect.all`, `Effect.map/flatMap`, service composition |
-| 11 | `11-testing.test.ts`                   | Bun-test + `Schema.decodeUnknownExit` + `Exit.isSuccess/isFailure`          |
+| 11 | `11-testing.test.ts`                   | `@effect/vitest` `it.effect` + `Effect.provide` + `Schema.decodeUnknownExit` + `Exit.isSuccess/isFailure` |
 
 ## Where each pattern lives in tbiz_ts
 

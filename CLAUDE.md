@@ -21,15 +21,54 @@ Default to using Bun instead of Node.js.
 
 ## Testing
 
-Use `bun test` to run tests.
+This project uses **two test runners**, picked by what's under test:
 
-```ts#index.test.ts
-import { test, expect } from "bun:test";
+| Use case                                | Runner            | Command            |
+| --------------------------------------- | ----------------- | ------------------ |
+| Effect programs (services, layers, etc) | `@effect/vitest`  | `bun run test`     |
+| Plain unit tests / utilities / shapes   | `bun:test`        | `bun run test:bun` |
+
+`@effect/vitest` is the effect-solutions recommendation for Effect code: it
+gives you `it.effect`, `TestClock`, `TestRandom`, automatic `Scope` cleanup,
+`it.layer` for suite-shared layers, and detailed fiber dumps. None of that
+is available under `bun:test`.
+
+`bun:test` is still the right tool for tests that don't run an Effect — it's
+fast, zero-config, and matches the rest of this project's Bun-first ethos.
+
+### File conventions
+
+- `*.test.ts` — picked up by **vitest** (see `vitest.config.ts`)
+- `*.bun.test.ts` — picked up by **bun:test** only (excluded from vitest)
+
+### Effect test (vitest)
+
+```ts#stories/example.test.ts
+import { describe, expect, it } from "@effect/vitest"
+import { Effect } from "effect"
+
+describe("hello", () => {
+  it.effect("runs an Effect", () =>
+    Effect.gen(function* () {
+      const x = yield* Effect.succeed(1 + 1)
+      expect(x).toBe(2)
+    }),
+  )
+})
+```
+
+### Plain unit test (bun:test)
+
+```ts#index.bun.test.ts
+import { expect, test } from "bun:test"
 
 test("hello world", () => {
-  expect(1).toBe(1);
-});
+  expect(1).toBe(1)
+})
 ```
+
+For the canonical Effect test patterns (schema decode, test layers, typed
+error assertions), see `stories/11-testing.test.ts` and `docs/11-testing.md`.
 
 ## Frontend
 
