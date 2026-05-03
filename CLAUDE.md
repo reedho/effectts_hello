@@ -156,6 +156,12 @@ For more information, read the Bun API docs in `node_modules/bun-types/docs/**.m
 Topics: quick-start, project-setup, tsconfig, basics, services-and-layers, data-modeling, error-handling, config, testing, cli.
 
 Never guess at Effect patterns - check the guide first.
+
+## Local Effect Source
+
+The Effect v4 repository is cloned to `~/.local/share/effect-solutions/effect` for reference.
+Use this to explore APIs, find usage examples, and understand implementation
+details when the documentation isn't enough.
 <!-- effect-solutions:end -->
 
 
