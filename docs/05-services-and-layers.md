@@ -184,6 +184,24 @@ const inTransaction = <A, E, R>(body: Effect.Effect<A, E, R>) =>
 
 Any `yield* Db` inside `body` sees the tx-scoped handle. Outside the body, `Db` is still the pool. Same pattern works for fake clocks in tests, request-scoped overrides, anywhere you need a local rebinding of a service tag. Runnable example: `stories/05-services-and-layers.ts` sections 8–9.
 
+## Disposable resources: `Effect.acquireDisposable`
+
+Added in beta.63. Many native bindings now implement TC39 Explicit Resource Management (`[Symbol.dispose]` / `[Symbol.asyncDispose]`) so they can clean themselves up — think `using db = new sqlite.DatabaseSync(...)`. `Effect.acquireDisposable` lifts an Effect producing such an object into a scope-bound resource without writing a manual release function:
+
+```ts
+const useConn = Effect.gen(function* () {
+  const conn = yield* Effect.acquireDisposable(
+    Effect.sync(() => new Connection("conn-1")),
+  )
+  return conn.query("SELECT 1")
+})
+
+Effect.runPromise(Effect.scoped(useConn))
+// acquire → dispose (at scope close) → result returned to the caller
+```
+
+Compare with `Effect.acquireRelease(acquire, release)`: when the resource already implements `[Symbol.dispose]`/`[Symbol.asyncDispose]`, `acquireDisposable` is the shorter form — the runtime calls the disposal method itself. Reach for `acquireRelease` only when the cleanup step lives elsewhere (a separate `close()` you have to invoke, a callback you have to fire, etc.). Runnable example: `stories/05-services-and-layers.ts` section 10.
+
 ## Takeaways
 
 - `Context.Service<Self, Shape>()("id")` declares the slot (`ServiceMap` in older betas).
@@ -191,3 +209,4 @@ Any `yield* Db` inside `body` sees the tx-scoped handle. Outside the body, `Db` 
 - `Effect.fn("Name.method")(function*() { ... })` for service methods.
 - `Layer.succeed` / `Layer.effect` are **curried**.
 - Provide once at the edge; sketch leaf tags first; store parameterized layers in a const.
+- For resources that implement TC39 disposal: `Effect.acquireDisposable` instead of `acquireRelease`.

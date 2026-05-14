@@ -272,6 +272,44 @@ const program9 = Effect.gen(function* () {
 
 console.log("9) tx swap:", await Effect.runPromise(program9.pipe(Effect.provide(Db.layer))));
 
+/* ---------- 10. Effect.acquireDisposable — TC39 explicit resource mgmt --- *
+ * (beta.63) Many native bindings now implement `[Symbol.dispose]` /
+ * `[Symbol.asyncDispose]` so the JS runtime can clean them up at scope
+ * exit (think `using db = new sqlite.DatabaseSync(...)`).
+ *
+ * `Effect.acquireDisposable` wraps an Effect that produces such an object
+ * and turns it into a scope-bound resource — no explicit release function
+ * needed; the disposable's own method handles cleanup. Compare with
+ * `Effect.acquireRelease(acquire, release)` where you wire the release
+ * step yourself.
+ */
+
+class Connection implements Disposable {
+  constructor(readonly label: string) {
+    console.log(`   acquire ${label}`);
+  }
+  query(sql: string) {
+    return `${this.label}> ${sql}`;
+  }
+  [Symbol.dispose]() {
+    console.log(`   dispose ${this.label}`);
+  }
+}
+
+const useConn = Effect.gen(function* () {
+  const conn = yield* Effect.acquireDisposable(
+    Effect.sync(() => new Connection("conn-1")),
+  );
+  // Use it freely within the scope; [Symbol.dispose] runs at scope close.
+  return conn.query("SELECT 1");
+});
+
+console.log(
+  "10) acquireDisposable:",
+  await Effect.runPromise(Effect.scoped(useConn)),
+);
+// stdout order: acquire → dispose (scope closes inside runPromise) → "10) …"
+
 /* ---------- Key takeaways ------------------------------------------------- *
  *   Context.Service<Self, Shape>()("id")  — tag
  *   static readonly layer / testLayer     — canonical layer names
@@ -284,4 +322,7 @@ console.log("9) tx swap:", await Effect.runPromise(program9.pipe(Effect.provide(
  *   Per-request services: `static readonly forRequest = (ctx) => Layer.succeed(...)`
  *   Service swap inside a scope: `Effect.provideService(Tag, alt)` for
  *     transaction handles, fake clocks, request-scoped overrides
+ *   Disposable resources: `Effect.acquireDisposable(eff)` reuses
+ *     `[Symbol.dispose]`/`[Symbol.asyncDispose]` instead of writing a
+ *     manual release fn (b63)
  */
