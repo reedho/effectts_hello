@@ -54,6 +54,7 @@
 - **`Config.literals`** — convenience constructor for `Schema.Literals` configs.
 - `Inspectable.stringifyCircular` removed; `Formatter.formatJson` preserves shared (non-circular) object references and only elides true cycles.
 - `Duration.Input` accepted directly by duration accessors.
+- `SchemaTransformation` decode messages normalized: `urlFromString` no longer leaks raw `URL` errors (now `"Invalid URL string: …"`), `dateTimeUtcFromString` reports `"Invalid UTC DateTime string: …"`, and `dateTimeZonedFromString` capitalizes `Zoned`. Matters only if you snapshot/compare these strings.
 - (RPC) `Rpc.custom`.
 
 ### 4.0.0-beta.59
