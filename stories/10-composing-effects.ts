@@ -8,7 +8,7 @@
  * Run: `bun stories/10-composing-effects.ts`
  */
 
-import { Console, Duration, Effect, Schedule, pipe } from "effect";
+import { Console, Duration, Effect, Schedule, Schema, pipe } from "effect";
 
 /* ---------- 1. Effect.all — run many in parallel ------------------------- *
  * With a record input you get a record back (great for readability).
@@ -107,6 +107,45 @@ const retried = pipe(
 );
 
 console.log("5) retry:", await Effect.runPromise(retried));
+
+/* ---------- 5b. Retry only on specific tagged errors --------------------- *
+ * The retry above retries *every* failure. Real services want to retry
+ * **transient** failures (network, 503, rate-limit) but fail fast on
+ * **terminal** ones (auth, validation, "you said no twice"). The
+ * options form of `Effect.retry` accepts a `while:` predicate over the
+ * error — combine it with the bounded backoff above so transient errors
+ * get up to N exponential retries and terminal errors short-circuit
+ * immediately.
+ */
+
+class Transient extends Schema.TaggedErrorClass<Transient>()("Transient", {
+  message: Schema.String,
+}) {}
+class Terminal extends Schema.TaggedErrorClass<Terminal>()("Terminal", {
+  message: Schema.String,
+}) {}
+
+let typedTries = 0;
+const flakyTyped: Effect.Effect<string, Transient | Terminal> = Effect.gen(function* () {
+  typedTries++;
+  if (typedTries === 1) return yield* new Transient({ message: "rate-limit" });
+  if (typedTries === 2) return yield* new Terminal({ message: "bad credentials" });
+  return "won't reach here";
+});
+
+const typedExit = await Effect.runPromiseExit(
+  flakyTyped.pipe(
+    Effect.retry({
+      schedule: pipe(
+        Schedule.exponential(Duration.millis(10)),
+        Schedule.both(Schedule.recurs(5)),
+      ),
+      while: (e) => e._tag === "Transient",
+    }),
+  ),
+);
+console.log("5b) typed-retry:", typedExit._tag, "after", typedTries, "attempts");
+// expect: Failure (Terminal on attempt 2), typedTries == 2
 
 /* ---------- 6. Effect.fn — the production sweet-spot --------------------- *
  * The effect-solutions recommendation for any function that returns an

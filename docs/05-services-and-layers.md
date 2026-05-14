@@ -153,6 +153,37 @@ class Notifier extends Context.Service<Notifier, {
 
 This lets you stabilise the *shape* of the system before picking a database or an email provider. Swap real layers in later without touching `Notifier`.
 
+## Request-scoped services
+
+Long-lived services (`Db`, `HttpClient`) live in the app-wide layer. But some context is **per-request**: the authenticated user, the tenant, a request ID. Model these as a service too, with a constructor that builds a fresh layer for each request:
+
+```ts
+class Tenant extends Context.Service<Tenant, { id: string; plan: "free" | "pro" }>()("app/Tenant") {
+  static readonly forRequest = (ctx: { id: string; plan: "free" | "pro" }) =>
+    Layer.succeed(Tenant)(ctx)
+}
+
+// In the request handler:
+const handle = (req: { id: string; plan: "free" | "pro" }) =>
+  business().pipe(Effect.provide(Tenant.forRequest(req)))
+```
+
+Business code reads it via `yield* Tenant` — no parameter threading. Each request gets its own layer instance; nothing leaks across requests.
+
+## Service swap inside a scope (DB transactions)
+
+A `Db` service runs queries against a connection pool. Inside a transaction, every query in the body must use the *same* dedicated connection — but the business code shouldn't change. `Effect.provideService(Tag, alt)` rebinds the tag locally for the duration of an effect:
+
+```ts
+const inTransaction = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const tx = yield* beginTx
+    return yield* body.pipe(Effect.provideService(Db, tx))
+  })
+```
+
+Any `yield* Db` inside `body` sees the tx-scoped handle. Outside the body, `Db` is still the pool. Same pattern works for fake clocks in tests, request-scoped overrides, anywhere you need a local rebinding of a service tag. Runnable example: `stories/05-services-and-layers.ts` sections 8–9.
+
 ## Takeaways
 
 - `Context.Service<Self, Shape>()("id")` declares the slot (`ServiceMap` in older betas).

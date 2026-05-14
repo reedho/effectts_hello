@@ -148,6 +148,77 @@ const logged = pipe(
 
 console.log("7 result:", await Effect.runPromise(logged));
 
+/* ---------- 8. Error-collapsing at a domain boundary -------------------- *
+ * Real-world pattern: a `checkout` service depends on two upstream things
+ * — an RPC client and a database. Each can fail in many infrastructure
+ * ways (auth, timeout, network, uniqueness violation). Callers shouldn't
+ * have to pattern-match every infra failure; they should see one of a
+ * small set of *domain* outcomes:
+ *
+ *   CheckoutUnavailable  — upstream down; safe to retry later
+ *   CheckoutDeclined     — we won't take this order; do not retry
+ *
+ * The boundary uses `Effect.catchTags` to collapse upstream errors into
+ * the domain hierarchy. Infrastructure details stay below the line.
+ */
+
+class RpcAuthExpired extends Schema.TaggedErrorClass<RpcAuthExpired>()("RpcAuthExpired", {}) {}
+class RpcTimeout extends Schema.TaggedErrorClass<RpcTimeout>()("RpcTimeout", {}) {}
+class DbUnique extends Schema.TaggedErrorClass<DbUnique>()("DbUnique", {
+  constraint: Schema.String,
+}) {}
+
+class CheckoutUnavailable extends Schema.TaggedErrorClass<CheckoutUnavailable>()(
+  "CheckoutUnavailable",
+  {},
+) {}
+class CheckoutDeclined extends Schema.TaggedErrorClass<CheckoutDeclined>()("CheckoutDeclined", {
+  reason: Schema.String,
+}) {}
+
+// Pretend upstream — three different failure modes plus a happy path.
+const rpcCharge = (id: string) =>
+  id === "rpc-auth"
+    ? Effect.fail(new RpcAuthExpired())
+    : id === "rpc-timeout"
+      ? Effect.fail(new RpcTimeout())
+      : Effect.succeed({ chargeId: "ch-1" });
+
+const dbInsertOrder = (id: string) =>
+  id === "dup"
+    ? Effect.fail(new DbUnique({ constraint: "orders_pk" }))
+    : Effect.succeed({ orderId: "o-1" });
+
+// One surface error type for the caller — three upstream errors collapsed
+// at the boundary. Note `catchTags` exhaustiveness: every upstream tag is
+// handled, so the resulting error channel is just CheckoutUnavailable | CheckoutDeclined.
+const checkout = (orderId: string) =>
+  pipe(
+    Effect.gen(function* () {
+      yield* rpcCharge(orderId);
+      return yield* dbInsertOrder(orderId);
+    }),
+    Effect.catchTags({
+      RpcAuthExpired: () => Effect.fail(new CheckoutUnavailable()),
+      RpcTimeout: () => Effect.fail(new CheckoutUnavailable()),
+      DbUnique: (e) =>
+        Effect.fail(new CheckoutDeclined({ reason: `duplicate:${e.constraint}` })),
+    }),
+  );
+
+const describeCheckout = (id: string) =>
+  pipe(
+    checkout(id),
+    Effect.match({
+      onSuccess: () => "OK",
+      onFailure: (e) => e._tag,
+    }),
+  );
+
+for (const id of ["ok", "rpc-auth", "rpc-timeout", "dup"] as const) {
+  console.log("8)", id, "→", await Effect.runPromise(describeCheckout(id)));
+}
+
 /* ---------- Legacy: Data.TaggedError ------------------------------------- *
  * The older `Data.TaggedError("Tag")<Payload>` is still supported (and
  * still appears all over tbiz_ts — see packages/api-client/src/error.ts).
@@ -166,4 +237,6 @@ void LegacyError;
  *   Effect.catchTag/Tags    — narrow on _tag
  *   Effect.orDie            — convert typed error → defect at boundaries
  *   Effect.catchDefect      — only at the outer edge (logger, crash report)
+ *   Collapse upstream errors at the boundary — callers see a small,
+ *   actionable domain hierarchy, not infrastructure leakage.
  */

@@ -91,6 +91,60 @@ Exit.match(exit, {
 await runtime.dispose();
 console.log("5) runtime disposed");
 
+/* ---------- 6. Per-key runtime cache + disposal discipline -------------- *
+ * Real-world: every tenant (or vendor, or env) gets its own runtime,
+ * because the Layer is parameterized — different DB URL, different API
+ * keys, different OTel exporter. Cache the runtime by key so requests
+ * for the same tenant reuse it. Two practical concerns:
+ *
+ *   (a) Concurrent first-callers may both build a runtime. Decide which
+ *       wins and `.dispose()` the loser. Production code guards this
+ *       with `Ref` or a mutex; this demo is single-threaded so a plain
+ *       Map suffices.
+ *
+ *   (b) On shutdown (or tenant rotation), dispose every cached runtime.
+ *       Skipping disposal leaks scope-managed resources — open sockets,
+ *       running fibers, OTel exporters that never flush.
+ */
+
+const makeTenantLayer = (tenantId: string) =>
+  Layer.succeed(Users)({
+    get: (id) =>
+      Effect.succeed({ id, name: `${tenantId}/${id}` }),
+  });
+
+const runtimes = new Map<string, ManagedRuntime.ManagedRuntime<Users, never>>();
+
+const getRuntime = (tenantId: string) => {
+  const cached = runtimes.get(tenantId);
+  if (cached) return cached;
+  const fresh = ManagedRuntime.make(makeTenantLayer(tenantId));
+  runtimes.set(tenantId, fresh);
+  return fresh;
+};
+
+const disposeAll = async () => {
+  await Promise.all(Array.from(runtimes.values()).map((r) => r.dispose()));
+  runtimes.clear();
+};
+
+const rtA = getRuntime("tenant-A");
+const rtB = getRuntime("tenant-B");
+const rtA2 = getRuntime("tenant-A"); // cache hit
+
+console.log("6a) cache reuses same instance:", rtA === rtA2);
+
+const fetchOne = Effect.gen(function* () {
+  const u = yield* Users;
+  return yield* u.get("42");
+});
+
+console.log("6b) A:", await rtA.runPromise(fetchOne));
+console.log("6c) B:", await rtB.runPromise(fetchOne));
+
+await disposeAll();
+console.log("6d) all runtimes disposed");
+
 /* ---------- Cheat sheet -------------------------------------------------- *
  *   ManagedRuntime.make(layer)           — build once
  *   runtime.runPromise(effect)           — Promise<A>

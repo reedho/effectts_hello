@@ -123,6 +123,24 @@ const spanned = pipe(
 
 For ad-hoc spans without wrapping in `Effect.fn`. Useful when the function is defined elsewhere and you just want a span around the call.
 
+## Retry only on specific tagged errors
+
+The exponential + bounded schedule above retries *every* failure. Real services want to retry **transient** failures (network, 503, rate-limit) but fail fast on **terminal** ones (auth, validation). The options form of `Effect.retry` accepts a `while:` predicate over the error:
+
+```ts
+flakyTyped.pipe(
+  Effect.retry({
+    schedule: pipe(
+      Schedule.exponential(Duration.millis(10)),
+      Schedule.both(Schedule.recurs(5)),
+    ),
+    while: (e) => e._tag === "Transient",
+  }),
+)
+```
+
+`Transient` errors get up to 5 exponential retries; the moment a `Terminal` shows up, retries stop and the failure propagates. The `while` predicate runs against the typed error channel, so it composes cleanly with `Schema.TaggedErrorClass`-shaped errors. Runnable example: `stories/10-composing-effects.ts` section 5b.
+
 ## When to use what
 
 - **`Effect.fn("Name")(function* () { ... }, flow?)`** — named service methods, functions you want traced. **This is the recommended default** for Effect-returning functions.

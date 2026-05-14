@@ -184,6 +184,94 @@ class Notifier extends Context.Service<Notifier, {
 // Add impls later — Notifier never changes.
 void Notifier;
 
+/* ---------- 8. Request-scoped services (auth, tenant, requestId) -------- *
+ * Long-lived services (Db, HttpClient) live in the app-wide layer. But
+ * some context is *per-request*: the authenticated user, the tenant, a
+ * request ID for tracing. Model these as a service too — and build a
+ * fresh layer at the top of each request.
+ *
+ * Business code reads them via `yield* Tenant` like any other service;
+ * the parameter never has to be threaded through call sites.
+ */
+
+interface TenantShape {
+  readonly id: string;
+  readonly plan: "free" | "pro";
+}
+class Tenant extends Context.Service<Tenant, TenantShape>()("app/Tenant") {
+  // Per-request constructor — call with the request's context.
+  static readonly forRequest = (ctx: TenantShape) => Layer.succeed(Tenant)(ctx);
+}
+
+const quota = Effect.fn("quota")(function* () {
+  const t = yield* Tenant;
+  return t.plan === "pro" ? "unlimited" : "100/day";
+});
+
+// A request handler builds the per-request layer once and provides it.
+const handleRequest = (req: TenantShape) =>
+  quota().pipe(Effect.provide(Tenant.forRequest(req)));
+
+console.log(
+  "8a) free tenant quota:",
+  await Effect.runPromise(handleRequest({ id: "t-1", plan: "free" })),
+);
+console.log(
+  "8b) pro tenant quota:",
+  await Effect.runPromise(handleRequest({ id: "t-2", plan: "pro" })),
+);
+
+/* ---------- 9. Service swap inside a scope (DB transaction) ------------- *
+ * The `Db` service runs queries against a connection pool. Inside a
+ * transaction, every query in the body must use the *same* dedicated
+ * connection — but the business code shouldn't have to change.
+ *
+ * The trick: `Effect.provideService(Db, txHandle)` rebinds the `Db` tag
+ * locally for the duration of `body`. Any `yield* Db` inside the body
+ * sees the transaction-scoped handle. Outside the body, the pool-backed
+ * `Db` is unchanged.
+ */
+
+interface DbShape {
+  readonly query: (sql: string) => Effect.Effect<string>;
+}
+class Db extends Context.Service<Db, DbShape>()("app/Db") {
+  static readonly layer = Layer.succeed(Db)({
+    query: (sql) => Effect.succeed(`pool: ${sql}`),
+  });
+}
+
+// Real code would BEGIN/COMMIT around the body and ROLLBACK on failure.
+const beginTx = Effect.sync<DbShape>(() => ({
+  query: (sql: string) => Effect.succeed(`tx#42: ${sql}`),
+}));
+
+const inTransaction = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const tx = yield* beginTx;
+    return yield* body.pipe(Effect.provideService(Db, tx));
+  });
+
+const insertTwo = Effect.gen(function* () {
+  const db = yield* Db;
+  const a = yield* db.query("INSERT a");
+  const b = yield* db.query("INSERT b");
+  return [a, b];
+});
+
+const insertOne = Effect.gen(function* () {
+  const db = yield* Db;
+  return yield* db.query("INSERT outside-tx");
+});
+
+const program9 = Effect.gen(function* () {
+  const outside = yield* insertOne; // pool-backed
+  const inside = yield* inTransaction(insertTwo); // tx-backed
+  return { outside, inside };
+});
+
+console.log("9) tx swap:", await Effect.runPromise(program9.pipe(Effect.provide(Db.layer))));
+
 /* ---------- Key takeaways ------------------------------------------------- *
  *   Context.Service<Self, Shape>()("id")  — tag
  *   static readonly layer / testLayer     — canonical layer names
@@ -193,4 +281,7 @@ void Notifier;
  *   Effect.provide ONCE at the edge
  *   Parameterized layers: store once, reuse the const
  *   Sketch leaf tags first; implementations come later
+ *   Per-request services: `static readonly forRequest = (ctx) => Layer.succeed(...)`
+ *   Service swap inside a scope: `Effect.provideService(Tag, alt)` for
+ *     transaction handles, fake clocks, request-scoped overrides
  */

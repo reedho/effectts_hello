@@ -105,6 +105,35 @@ function RuntimeProvider({ children }: PropsWithChildren) {
 
 The `b2c-studio` app uses this exact shape for `QilinService` + `PegasusService`.
 
+## Per-key runtime cache + disposal discipline
+
+In a multi-tenant or multi-vendor app, every tenant gets its own `ManagedRuntime` — the layer is parameterized by tenant config (different DB URL, different API keys, different OTel exporter). Cache by key so requests for the same tenant reuse the runtime:
+
+```ts
+const runtimes = new Map<string, ManagedRuntime.ManagedRuntime<Deps, never>>()
+
+const getRuntime = (tenantId: string) => {
+  const cached = runtimes.get(tenantId)
+  if (cached) return cached
+  const fresh = ManagedRuntime.make(makeTenantLayer(tenantId))
+  runtimes.set(tenantId, fresh)
+  return fresh
+}
+
+const disposeAll = async () => {
+  await Promise.all(Array.from(runtimes.values()).map((r) => r.dispose()))
+  runtimes.clear()
+}
+```
+
+Two practical concerns:
+
+1. **Race-safe init.** Concurrent first-callers can both build a runtime. Production code guards this with `Ref` or a mutex and disposes the loser; the demo above is single-threaded, so a plain Map suffices.
+2. **Disposal at shutdown.** Skipping `disposeAll` leaks scope-managed resources — open sockets, running fibers, OTel exporters that never flush. Wire `disposeAll` into your shutdown hook.
+3. **Share a `memoMap` across runtimes.** `ManagedRuntime.make(layer, { memoMap: shared.memoMap })` reuses the memoization map of an existing runtime. Common slices — logger, OTel exporter, config — are built once and shared by every tenant runtime, instead of rebuilt per key. Use this when only a small part of the layer is parameterized.
+
+Runnable example: `stories/08-managed-runtime.ts` section 6.
+
 ## Takeaways
 
 - One runtime per app edge; dispose on shutdown.

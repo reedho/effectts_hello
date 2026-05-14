@@ -115,6 +115,30 @@ const logged = pipe(
 
 By the time you're catching a defect, the program is already in a bad state. Catching just gives you a chance to report it before shutdown.
 
+## Collapse upstream errors at the domain boundary
+
+Real services depend on multiple upstreams — an RPC client, a database, a cache. Each upstream has its own failure taxonomy: `RpcAuthExpired`, `RpcTimeout`, `DbUnique`. If those leak through your domain service, every caller has to know every infrastructure failure mode.
+
+A better shape: your service exposes a small, **actionable** domain hierarchy (`CheckoutUnavailable`, `CheckoutDeclined`), and the boundary uses `Effect.catchTags` to collapse the upstream errors into it. Callers see two outcomes; the infrastructure mapping lives in one place.
+
+```ts
+const checkout = (orderId: string) =>
+  pipe(
+    Effect.gen(function* () {
+      yield* rpcCharge(orderId)
+      return yield* dbInsertOrder(orderId)
+    }),
+    Effect.catchTags({
+      RpcAuthExpired: () => Effect.fail(new CheckoutUnavailable()),
+      RpcTimeout:     () => Effect.fail(new CheckoutUnavailable()),
+      DbUnique: (e) =>
+        Effect.fail(new CheckoutDeclined({ reason: `duplicate:${e.constraint}` })),
+    }),
+  )
+```
+
+`catchTags` is exhaustive: handling every upstream tag narrows the error channel down to the domain hierarchy. The caller's signature reflects *only* outcomes they can act on — retry later vs. don't retry. See `stories/04-tagged-errors.ts` section 8 for the runnable example.
+
 ## Legacy: `Data.TaggedError`
 
 Still supported. Still all over `tbiz_ts`. Structurally similar, but **not Schema-integrated** — no validation, no serialization. Fine for simple cases; prefer `Schema.TaggedErrorClass` in new code.
