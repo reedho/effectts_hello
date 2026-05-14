@@ -25,8 +25,10 @@ const Port = Schema.NumberFromString.pipe(
 );
 type Port = typeof Port.Type;
 
-const Environment = Schema.Literals(["development", "staging", "production"]);
-type Environment = typeof Environment.Type;
+// For a *literal union* we don't need a separate Schema — `Config.literals`
+// (beta.60) is the shortcut for `Config.schema(Schema.Literals(values), name)`.
+const ENV_VALUES = ["development", "staging", "production"] as const;
+type Environment = (typeof ENV_VALUES)[number];
 
 /* ---------- 2. A Config service with layer + testLayer ------------------ */
 
@@ -43,7 +45,7 @@ class AppConfig extends Context.Service<AppConfig, AppConfigShape>()("app/AppCon
     Effect.gen(function* () {
       const host = yield* Config.string("HOST").pipe(Config.withDefault("localhost"));
       const port = yield* Config.schema(Port, "PORT");
-      const env = yield* Config.schema(Environment, "APP_ENV");
+      const env = yield* Config.literals(ENV_VALUES, "APP_ENV");
       const apiKey = yield* Config.redacted("API_KEY");
       return { host, port, env, apiKey };
     }),

@@ -255,7 +255,6 @@ Items the alignment doc (`CHANGES.md`) flagged as version-skewed, plus new items
 - **`ServiceMap` alias** — story 05's version-skew note is moot if it returns.
 - **`ConfigProvider.fromUnknown` env-style underscore split** — beta.57 reads literal path segments. If that lands, the nested-object workaround in story 06 simplifies.
 - **`@effect/vitest` adopted (b57+)** — chapter 11 now uses `@effect/vitest`; `bun:test` retained for plain unit tests only.
-- **`Config.literals` (b60)** — story 06 could simplify any literal-union config now that there's a built-in.
 - **`Schema.DurationFromString` (b60)** — story 02 or 06 could use this for `Duration` config/codec fields instead of hand-rolled transforms.
 - **`HttpApiTest` module (b63)** — if we add an HttpApi server story, this is the canonical test harness.
 

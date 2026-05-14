@@ -24,7 +24,11 @@ const Port = Schema.NumberFromString.pipe(
 )
 type Port = typeof Port.Type
 
-const Environment = Schema.Literals(["development", "staging", "production"])
+// For a literal union, b60+ adds `Config.literals` — shortcut for
+// `Config.schema(Schema.Literals(values), name)`. No standalone Schema needed
+// unless you want to reuse it elsewhere.
+const ENV_VALUES = ["development", "staging", "production"] as const
+type Environment = (typeof ENV_VALUES)[number]
 ```
 
 - `Schema.NumberFromString` transforms the env-var string into a number.
@@ -36,9 +40,12 @@ Consume it from a Config:
 ```ts
 const port = yield* Config.schema(Port, "PORT")
 // port: Port (branded, validated)
+
+const env  = yield* Config.literals(ENV_VALUES, "APP_ENV")
+// env: "development" | "staging" | "production"
 ```
 
-That same `Port` schema also decodes HTTP query params, validates form input, etc. One source of truth.
+That same `Port` schema also decodes HTTP query params, validates form input, etc. One source of truth. For literal unions, `Config.literals` skips the round-trip through a named Schema.
 
 ## Wrapping Config in a Service
 
@@ -55,7 +62,7 @@ class AppConfig extends Context.Service<AppConfig, {
     Effect.gen(function* () {
       const host   = yield* Config.string("HOST").pipe(Config.withDefault("localhost"))
       const port   = yield* Config.schema(Port, "PORT")
-      const env    = yield* Config.schema(Environment, "APP_ENV")
+      const env    = yield* Config.literals(ENV_VALUES, "APP_ENV")
       const apiKey = yield* Config.redacted("API_KEY")
       return { host, port, env, apiKey }
     }),
