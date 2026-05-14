@@ -4,7 +4,7 @@
 >
 > Skipped: AI / LanguageModel / EmbeddingModel, MCP, Workflow, Cluster, RPC internals, CLI prompt UX, Atom reactivity. Read [`packages/effect/CHANGELOG.md`](https://github.com/Effect-TS/effect-smol/blob/main/packages/effect/CHANGELOG.md) for the full list.
 >
-> Baseline: `tbiz_ts` was authored against beta.31. This codebase targets beta.57. Latest published is **beta.66**.
+> Baseline: `tbiz_ts` was authored against beta.31. This codebase targets **beta.66** (latest published).
 
 ## Quick map: which changes touch our chapters
 
@@ -24,8 +24,8 @@
 
 ## Per-version highlights
 
-### 4.0.0-beta.66
-- **`Effect.Yieldable` type removed.** Tagged-error / yieldable instances still work via the iterator protocol (`yield* new MyError(...)` is fine), but code that explicitly references the `Effect.Yieldable` *type* breaks. Story 04 only uses the value form, so we expect no source changes — confirm on bump.
+### 4.0.0-beta.66 — **codebase target**
+- **`Effect.Yieldable` type removed.** Tagged-error / yieldable instances still work via the iterator protocol (`yield* new MyError(...)` is fine), but code that explicitly references the `Effect.Yieldable` *type* breaks. Verified on bump: story 04 uses only the value form, no source changes needed.
 - `Schema.Struct` field types preserve IDE provenance (`Type_<>` rewritten with `keyof F as …`): Go-to-Definition now jumps to the originating Struct field. Pure DX win.
 - `HttpApiTest.groups` accepts an optional `baseUrl` override (default `"http://localhost:3000"`).
 - HTTP server logger log span names lose their auto-increment suffix.
@@ -63,7 +63,7 @@
 - Reactivity `AsyncResult.exhaustive()` finalizer.
 - HTTP body consumption + stream → binary array allocation improvements.
 
-### 4.0.0-beta.57 *(2026-04-22)* — **codebase target**
+### 4.0.0-beta.57 *(2026-04-22)*
 - **`ServiceMap` module renamed to `Context`** — use `Context.Service<Self, Shape>()('id')`. Memory note `effect-4-0-0-beta-57-effect-smol` covers the full delta.
 - `Effect.abortSignal` for AbortSignal-driven cancellation.
 - Each SQL client gets a unique transaction service.
@@ -250,7 +250,6 @@
 Items the alignment doc (`CHANGES.md`) flagged as version-skewed, plus new items introduced by beta.59–66 — re-check when bumping:
 
 - **`Effect.Yieldable` type removed (b66)** — chapter 04 documents yieldable tagged errors. Source uses only the value form (`yield* new MyError(...)`), which still works via iterator protocol. Verify on bump that no docs reference the type signature and that `Schema.TaggedErrorClass` / `Data.TaggedError` instances still yield cleanly.
-- **`Schema.makeUnsafe` → `Schema.make` renamed back (b44)** — story 02 currently uses `Schema.decodeUnknownSync(Brand)(value)` for branded schemas. The instance method `.make` is the supported direct constructor again; re-evaluate the workaround.
 - **`Effect.catchAll` reintroduction** — `match` / `matchEffect` / `catchTag` is the current shape.
 - **`ServiceMap` alias** — story 05's version-skew note is moot if it returns.
 - **`ConfigProvider.fromUnknown` env-style underscore split** — beta.57 reads literal path segments. If that lands, the nested-object workaround in story 06 simplifies.

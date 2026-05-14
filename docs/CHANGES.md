@@ -141,8 +141,7 @@ const describe = (r: PaymentResult) =>
 - Same schema reusable for config, HTTP boundary, form validation.
 
 **Cons**
-- More construction noise: `Schema.decodeUnknownSync(Email)("a@b.c")` rather than a string literal.
-- In beta.57, branded schemas don't expose `.makeUnsafe` yet — you decode. Later betas add a cheap constructor.
+- More construction noise: `Email.make("a@b.c")` rather than a string literal.
 - Readers see many branded types and wonder "did I need all of these?" — yes, in a real app; no, in a throwaway.
 
 **Keep the old form when.** Prototypes and internal helpers where values never cross module boundaries.
@@ -433,14 +432,12 @@ We kept these deliberately:
 - **`Effect.match` / `Effect.matchEffect`** — effect-solutions references `Effect.catch` but that export doesn't exist in beta.57; `match` + `catchTag` are the current shape.
 - **`Schedule.both` instead of `Schedule.intersect`** — same renamed-in-beta.57 story.
 - **`ConfigProvider.fromUnknown` with nested objects** — the beta.57 behaviour reads by literal path segments, not by splitting on `_`.
-- **Branded construction via `Schema.decodeUnknownSync(Brand)(value)`** — `.makeUnsafe` isn't exposed on branded schemas yet.
-- **`bun:test` for the testing chapter** — the CLAUDE.md mandate overrides effect-solutions' `@effect/vitest` recommendation. The chapter now opens with an explicit trade-off note so readers know what they'd gain from `@effect/vitest` and when to bring it in as a project exception.
+- **`@effect/vitest` for the testing chapter** — adopted in beta.57+, aligned with effect-solutions' recommendation. `bun:test` retained for plain unit tests (`*.bun.test.ts`).
 
 ## When to re-audit
 
 When the effect version bumps:
 
-- Check whether `Schema.make` / `.makeUnsafe` ships on branded schemas (story 02 can then drop the `decodeUnknownSync(Brand)` workaround).
-- Check whether `Effect.catchAll` returns (story 01 + audit both claim it doesn't exist in beta.57).
+- Check whether `Effect.catchAll` returns (story 01 + audit both claim it doesn't exist in beta.57+).
 - Check whether `ServiceMap` comes back as an alias (story 05's version-skew note may become obsolete).
 - Re-run `effect-solutions show basics services-and-layers data-modeling error-handling config testing` and diff against our chapters.

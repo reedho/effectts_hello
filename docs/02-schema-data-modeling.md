@@ -85,17 +85,19 @@ export const Port = Schema.Int.pipe(
 )
 ```
 
-Construct branded values by decoding:
+Two ways to construct a branded value:
 
 ```ts
-const port: Port = Schema.decodeUnknownSync(Port)(8080)
+// Direct constructor — runs the checks once, throws on failure.
+// Use when the input is already typed.
+const port: Port = Port.make(8080)
+
+// Through the decoder — same checks, but accepts `unknown`.
+// Use for parsed JSON, network payloads, anything untrusted.
+const port2: Port = Schema.decodeUnknownSync(Port)(8080)
 ```
 
 `getUser(userId)` will compile; `getUser(postId)` won't. Same with `Email` vs raw string. You pay one line of boilerplate and get a type error every time someone would've silently passed the wrong kind of value.
-
-### `.makeUnsafe` / `Schema.make`
-
-Later Effect betas ship a runtime `.makeUnsafe` method on branded schemas for cheap construction without decoding. In beta.57 it isn't exposed yet — use `Schema.decodeUnknownSync(Brand)(value)` as the portable form.
 
 ## The v4 array-form trap
 

@@ -44,11 +44,15 @@ export const Port = Schema.Int.pipe(
 );
 export type Port = typeof Port.Type;
 
-// Construct branded values by decoding — this runs the checks + brands in
-// one step. (Later betas add `Schema.make`/`makeUnsafe` constructors on
-// branded schemas; in beta.57 decode is the portable path.)
-const u1: UserId = Schema.decodeUnknownSync(UserId)("user-123");
-const p1: Port = Schema.decodeUnknownSync(Port)(8080);
+// Two equivalent ways to construct a branded value:
+//   - `Brand.make(value)`         — runs the checks once, returns the branded type.
+//                                   Throws synchronously on failure. Preferred for
+//                                   trusted, in-process construction.
+//   - `Schema.decodeUnknownSync(Brand)(value)` — same checks, but goes through the
+//                                   decoder. Use when the input shape is `unknown`
+//                                   (parsed JSON, network payloads).
+const u1: UserId = UserId.make("user-123");
+const p1: Port = Port.make(8080);
 console.log("1) branded:", { u1, p1 });
 
 /* ---------- 2. Schema.Class — records with methods ----------------------- *
@@ -73,9 +77,9 @@ class User extends Schema.Class<User>("User")({
 }
 
 const alice = new User({
-  id: Schema.decodeUnknownSync(UserId)("u-1"),
+  id: UserId.make("u-1"),
   name: "Alice",
-  email: Schema.decodeUnknownSync(Email)("alice@example.com"),
+  email: Email.make("alice@example.com"),
   createdAt: new Date().toISOString(),
 });
 console.log("2) User class:", alice.displayName);
@@ -149,7 +153,7 @@ class Trip extends Schema.Class<Trip>("Trip")({
 }) {}
 
 const trip = new Trip({
-  id: Schema.decodeUnknownSync(UserId)("u-1"),
+  id: UserId.make("u-1"),
   title: "Jakarta → Tokyo",
   purpose: "DINAS",
   departureDate: "2026-05-01",

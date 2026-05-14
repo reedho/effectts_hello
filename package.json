@@ -12,7 +12,7 @@
   },
   "devDependencies": {
     "@effect/language-service": "^0.85.1",
-    "@effect/vitest": "^4.0.0-beta.58",
+    "@effect/vitest": "^4.0.0-beta.66",
     "@types/bun": "latest",
     "vitest": "^4.1.5"
   },
@@ -20,6 +20,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "effect": "^4.0.0-beta.57"
+    "effect": "^4.0.0-beta.66"
   }
 }
