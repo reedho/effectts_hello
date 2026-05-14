@@ -255,6 +255,6 @@ Items the alignment doc (`CHANGES.md`) flagged as version-skewed, plus new items
 - **`ServiceMap` alias** — story 05's version-skew note is moot if it returns.
 - **`ConfigProvider.fromUnknown` env-style underscore split** — beta.57 reads literal path segments. If that lands, the nested-object workaround in story 06 simplifies.
 - **`@effect/vitest` adopted (b57+)** — chapter 11 now uses `@effect/vitest`; `bun:test` retained for plain unit tests only.
-- **`HttpApiTest` module (b63)** — if we add an HttpApi server story, this is the canonical test harness.
+- **`HttpApiTest` module (b63)** — pattern documented in chapter 11 ("Testing HttpApi handlers without a server"). Convert to a runnable test once we add an HttpApi server story (needs `@effect/platform-bun`).
 
 When bumping, re-run `effect-solutions show basics services-and-layers data-modeling error-handling config testing` and diff against our chapters.

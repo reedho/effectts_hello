@@ -200,6 +200,42 @@ function expectTagged<E extends { _tag: string }>(
 }
 ```
 
+## Testing HttpApi handlers without a server: `HttpApiTest`
+
+beta.63 added `HttpApiTest.groups` under `effect/unstable/httpapi`. It builds an `HttpApiClient` that dispatches through an in-memory `HttpClient` wired straight to `HttpApiBuilder.layer(api)` — no port, no server lifecycle. baseUrl is configurable (default `"http://localhost:3000"`, b66).
+
+Conceptually:
+
+```ts
+import { HttpApiBuilder, HttpApiTest } from "effect/unstable/httpapi"
+// platform layer comes from your runtime — e.g.
+//   @effect/platform-node:    NodeHttpServer.layerHttpServices
+//   @effect/platform-bun:     BunHttpServer.layerHttpServices
+import { NodeHttpServer } from "@effect/platform-node"
+
+it.effect("groups.findById returns the seeded group", () =>
+  Effect.gen(function* () {
+    const client = yield* HttpApiTest.groups(Api, ["groups"])
+    const result = yield* client.groups.findById({ params: { id: 1 } })
+    expect(result).toEqual(new Group({ id: 1, name: "foo" }))
+  }).pipe(
+    Effect.provide([
+      NodeHttpServer.layerHttpServices,
+      // The handlers you want exercised live in this group:
+      HttpApiBuilder.group(Api, "groups", (h) =>
+        h
+          .handle("findById", () => Effect.succeed(new Group({ id: 1, name: "foo" })))
+          .handle("create",   () => Effect.die("unimplemented"))),
+    ]),
+  ),
+)
+```
+
+- Pass the group names you want "live" — every other group's endpoints are auto-stubbed with `Effect.die("Unhandled endpoint: …")`. This isolates the unit under test.
+- A platform layer (`platform-node` or `platform-bun`) supplies `FileSystem`, `HttpPlatform`, `Path`, and the etag `Generator` that `HttpApiBuilder.layer` needs. The storybook doesn't ship one yet — add `@effect/platform-bun` and pull in `BunHttpServer.layerHttpServices` when you build out the HttpApi server story.
+
+Reference: `packages/platform-node/test/HttpApi.test.ts` in the upstream `effect-smol` clone.
+
 ## Takeaways
 
 - `@effect/vitest` is the default for Effect tests — `it.effect` + `Effect.provide`.
@@ -207,3 +243,4 @@ function expectTagged<E extends { _tag: string }>(
 - `decodeUnknownExit` + `Exit.isSuccess/isFailure` is the schema test shape, in either runner.
 - For typed-error assertions inside `it.effect`, lift to an `Exit` with `Effect.exit(...)`, then `Cause.findErrorOption`.
 - Reach for `it.layer` (suite-shared layers) and `TestClock` (deterministic time) when you need them — both come for free with `@effect/vitest`.
+- `HttpApiTest.groups` (b63) tests HttpApi handlers in-memory; needs a platform layer for the etag/filesystem services.
