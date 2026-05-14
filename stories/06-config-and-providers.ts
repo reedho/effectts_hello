@@ -10,7 +10,7 @@
  * Run: `bun stories/06-config-and-providers.ts`
  */
 
-import { Config, ConfigProvider, Context, Effect, Layer, Redacted, Schema } from "effect";
+import { Config, ConfigProvider, Context, Duration, Effect, Layer, Redacted, Schema } from "effect";
 
 /* ---------- 1. Validate + brand config values with Config.schema --------- *
  * `Schema.NumberFromString` decodes the env-var string into a number.
@@ -37,6 +37,7 @@ interface AppConfigShape {
   readonly port: Port;
   readonly env: Environment;
   readonly apiKey: Redacted.Redacted;
+  readonly requestTimeout: Duration.Duration;
 }
 
 class AppConfig extends Context.Service<AppConfig, AppConfigShape>()("app/AppConfig") {
@@ -47,7 +48,11 @@ class AppConfig extends Context.Service<AppConfig, AppConfigShape>()("app/AppCon
       const port = yield* Config.schema(Port, "PORT");
       const env = yield* Config.literals(ENV_VALUES, "APP_ENV");
       const apiKey = yield* Config.redacted("API_KEY");
-      return { host, port, env, apiKey };
+      // `Schema.DurationFromString` (b60) parses any string `Duration.fromInput`
+      // accepts: "1 second", "500 millis", "Infinity", etc.
+      const requestTimeout = yield* Config.schema(Schema.DurationFromString, "REQUEST_TIMEOUT")
+        .pipe(Config.withDefault(Duration.seconds(30)));
+      return { host, port, env, apiKey, requestTimeout };
     }),
   );
 
@@ -57,6 +62,7 @@ class AppConfig extends Context.Service<AppConfig, AppConfigShape>()("app/AppCon
     port: Schema.decodeUnknownSync(Port)("8080"),
     env: "development",
     apiKey: Redacted.make("test-key"),
+    requestTimeout: Duration.seconds(1),
   });
 }
 
@@ -70,6 +76,7 @@ const provider = ConfigProvider.fromUnknown({
   PORT: "6543",
   APP_ENV: "staging",
   API_KEY: "s3cret",
+  REQUEST_TIMEOUT: "5 seconds",
 });
 
 const program = Effect.fn("showConfig")(function* () {
@@ -80,6 +87,7 @@ const program = Effect.fn("showConfig")(function* () {
     env: cfg.env,          // literal-narrowed
     apiKey: String(cfg.apiKey),       // "<redacted>"
     apiKeyValue: Redacted.value(cfg.apiKey),
+    requestTimeout: String(cfg.requestTimeout),
   });
 });
 

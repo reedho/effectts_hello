@@ -43,9 +43,13 @@ const port = yield* Config.schema(Port, "PORT")
 
 const env  = yield* Config.literals(ENV_VALUES, "APP_ENV")
 // env: "development" | "staging" | "production"
+
+const requestTimeout = yield* Config.schema(Schema.DurationFromString, "REQUEST_TIMEOUT")
+  .pipe(Config.withDefault(Duration.seconds(30)))
+// requestTimeout: Duration  — parses "5 seconds", "500 millis", "Infinity", …
 ```
 
-That same `Port` schema also decodes HTTP query params, validates form input, etc. One source of truth. For literal unions, `Config.literals` skips the round-trip through a named Schema.
+That same `Port` schema also decodes HTTP query params, validates form input, etc. One source of truth. For literal unions, `Config.literals` skips the round-trip through a named Schema. For durations, `Schema.DurationFromString` (b60) takes any string `Duration.fromInput` accepts.
 
 ## Wrapping Config in a Service
 
@@ -57,6 +61,7 @@ class AppConfig extends Context.Service<AppConfig, {
   readonly port: Port
   readonly env: Environment
   readonly apiKey: Redacted.Redacted
+  readonly requestTimeout: Duration.Duration
 }>()("app/AppConfig") {
   static readonly layer = Layer.effect(AppConfig)(
     Effect.gen(function* () {
@@ -64,7 +69,9 @@ class AppConfig extends Context.Service<AppConfig, {
       const port   = yield* Config.schema(Port, "PORT")
       const env    = yield* Config.literals(ENV_VALUES, "APP_ENV")
       const apiKey = yield* Config.redacted("API_KEY")
-      return { host, port, env, apiKey }
+      const requestTimeout = yield* Config.schema(Schema.DurationFromString, "REQUEST_TIMEOUT")
+        .pipe(Config.withDefault(Duration.seconds(30)))
+      return { host, port, env, apiKey, requestTimeout }
     }),
   )
 
@@ -73,6 +80,7 @@ class AppConfig extends Context.Service<AppConfig, {
     port: Schema.decodeUnknownSync(Port)("8080"),
     env: "development",
     apiKey: Redacted.make("test-key"),
+    requestTimeout: Duration.seconds(1),
   })
 }
 ```
