@@ -149,6 +149,26 @@ flakyTyped.pipe(
 
 The typical split in production code: `Effect.fn` at the function declaration level (one span per method), `Effect.gen` for the generator body inside, `pipe` outside for retries/timeouts/catches that apply to the whole body.
 
+## Sequential fallback: `Effect.firstSuccessOf`
+
+Ported back from v3 in beta.61. Walks an iterable in order, returns the first success. If every effect fails, fails with the **last** error. Useful for prioritized sources — primary API → secondary → cache.
+
+```ts
+const primary   = Effect.fail(new Error("primary unavailable"))
+const secondary = Effect.succeed("secondary result")
+const tertiary  = Effect.sync(() => { throw new Error("never reached") })
+
+Effect.firstSuccessOf([primary, secondary, tertiary])
+// Effect<string, Error>  — runs `primary`, then `secondary` (succeeds), stops.
+```
+
+Distinct from neighbouring patterns:
+
+- **`Effect.race(...)`** — parallel, returns whichever finishes first (winner takes all).
+- **`effect.pipe(Effect.orElse(() => fallback))`** — binary; chain N together by hand.
+
+Edge case: an empty iterable defects with `"Received an empty collection of effects"`. Build the list dynamically (e.g. one entry per configured endpoint) and you'll see this if all entries get filtered out.
+
 ## Takeaways
 
 - `Effect.fn` first — spans, call-site traces, clean signatures.
@@ -156,4 +176,5 @@ The typical split in production code: `Effect.fn` at the function declaration le
 - `Effect.tap` for logging and metrics.
 - `Effect.cachedWithTTL` for "auth once, reuse" patterns.
 - `Schedule.exponential + both(recurs(n))` covers most retry policies.
+- `Effect.firstSuccessOf` for prioritized-fallback patterns (primary → secondary → cache).
 - `Effect.fn` inside, `pipe` outside.

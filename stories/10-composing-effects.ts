@@ -147,6 +147,27 @@ const typedExit = await Effect.runPromiseExit(
 console.log("5b) typed-retry:", typedExit._tag, "after", typedTries, "attempts");
 // expect: Failure (Terminal on attempt 2), typedTries == 2
 
+/* ---------- 5c. Effect.firstSuccessOf — sequential fallback -------------- *
+ * (Ported from v3 in beta.61.) Walks the iterable in order, returns the
+ * first success, and — if every effect fails — fails with the LAST error.
+ * Useful for prioritized sources: primary API → secondary → cache.
+ *
+ * Contrast with:
+ *   - `Effect.race` — runs all in parallel, takes whichever finishes first.
+ *   - `effect.orElse(fallback)` — only binary; chain N together by hand.
+ *
+ * Empty iterable defects with "Received an empty collection of effects".
+ */
+
+const primary = Effect.fail(new Error("primary unavailable") as Error);
+const secondary = Effect.succeed("secondary result");
+const tertiary = Effect.sync(() => {
+  throw new Error("never evaluated — sequential, short-circuits on first success");
+});
+
+console.log("5c) firstSuccessOf:", Effect.runSync(Effect.firstSuccessOf([primary, secondary, tertiary])));
+// → "secondary result"; tertiary is never touched.
+
 /* ---------- 6. Effect.fn — the production sweet-spot --------------------- *
  * The effect-solutions recommendation for any function that returns an
  * Effect: wrap it in `Effect.fn("Name")(function* (args) { ... })`. You
