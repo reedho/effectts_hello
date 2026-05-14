@@ -48,6 +48,7 @@
 - **`Effect.firstSuccessOf` ported from Effect v3** — runs effects in order, returns the first success, fails with the last failure if all fail. Useful in chapter 10 (composition) examples.
 - `HttpApiBuilder` correctly decodes empty bodies.
 - Fiber-runtime start metrics recorded at construction (yielded fibers no longer double-counted).
+- **`@effect/opentelemetry`**: `OtelLogger.make` now emits OTel-spec `SeverityNumber` (1–24) instead of Effect's internal log-level ordinal (Info=20000, Error=40000, …). Backends that validated the field (Honeycomb, Datadog) were bucketing those as `UNSPECIFIED`. New helper `logLevelToSeverityNumber` exported.
 
 ### 4.0.0-beta.60
 - **`Schema.DurationFromString`** + `SchemaTransformation.durationFromString`. `Duration.fromInput` now accepts `"Infinity"` / `"-Infinity"`. Config duration parsing simplified around the shared schema codec.
