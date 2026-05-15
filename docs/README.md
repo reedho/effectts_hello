@@ -23,6 +23,10 @@ bun test stories/11-testing.test.ts
 10. [Composing effects](./10-composing-effects.md) — `all`, `forEach`, `cachedWithTTL`, retries
 11. [Testing](./11-testing.md) — Bun-test + `Exit`
 
+## Reference
+
+- [Missionary ↔ Effect-TS](./missionary-vs-effect.md) — primitive-by-primitive comparison with Leo Noel's [Missionary](https://github.com/leonoel/missionary) (Clojure)
+
 ## Version note
 
 These tutorials target `effect@4.0.0-beta.57` (effect-smol, which consolidated `@effect/platform` into core). The reference source — `tbiz_ts` — was written against `effect@4.0.0-beta.31`. The user-facing API is 95% identical; the handful of v4.31 → v4.57 differences are called out inline where they matter.
