@@ -54,3 +54,5 @@
 # - github.repo
 
 export.include-memories: true
+
+sync.remote: "git+ssh://git@github.com/reedho/effectts_hello.git"
