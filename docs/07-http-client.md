@@ -89,15 +89,20 @@ const call = Effect.gen(function* () {
 
 This is the shape of `qilinClient` and `pgsClient` in tbiz_ts.
 
-## Error renames from v3
+## Errors: catch `HttpClientError`, branch on `reason`
 
-| v3 tag to catch          | v4 tag to catch        |
-| ------------------------ | ---------------------- |
-| `"ResponseError"`        | `"StatusCodeError"` (or `"HttpClientError"`) |
-| `"RequestError"`         | `"TransportError"` (or `"HttpClientError"`)   |
-| `"ParseError"` (schema)  | `"SchemaError"`        |
+In v4 the **only** error in the channel is `HttpClientError` (`_tag: "HttpClientError"`) — that's why `filterStatusOk` types everything as `HttpClientError` and why the story does `catchTag("HttpClientError")`. There is **no** `catchTag("StatusCodeError")`: the specific failure lives on `error.reason`, a tagged union.
 
-`HttpClientError` is a base class that covers both request and response failures, which is why `filterStatusOk` types everything as `HttpClientError`. Match on it when you don't need finer granularity.
+| `error.reason._tag` | side     | typical cause                                   |
+| ------------------- | -------- | ----------------------------------------------- |
+| `"TransportError"`  | request  | connection refused, DNS, socket (≈ v3 `RequestError`) |
+| `"EncodeError"`     | request  | request body failed to encode                   |
+| `"InvalidUrlError"` | request  | malformed URL                                   |
+| `"StatusCodeError"` | response | non-2xx (e.g. after `filterStatusOk`) (≈ v3 `ResponseError`) |
+| `"DecodeError"`     | response | response body failed to decode                  |
+| `"EmptyBodyError"`  | response | expected a body, received none                  |
+
+The reason groupings are `RequestError = TransportError | EncodeError | InvalidUrlError` and `ResponseError = StatusCodeError | DecodeError | EmptyBodyError`. Catch `"HttpClientError"` when you don't need granularity (as the story does); switch on `error.reason._tag` when you do. Schema decode failures (v3 `"ParseError"`) surface as `SchemaError` — see chapter 03.
 
 `HttpBodyError.reason` also changed — it's now a tagged union (`{ _tag: "JsonError" } | { _tag: "SchemaError", issue }`). Stringify it or narrow by tag.
 
@@ -108,7 +113,7 @@ This is the shape of `qilinClient` and `pgsClient` in tbiz_ts.
 
 ## Schema decode of the response body
 
-The v4 migration note: `HttpClientResponse.schemaBodyJson(schema)(response)` was removed because its constraints can't be satisfied for generic schemas. Do the decode manually:
+`HttpClientResponse.schemaBodyJson(schema)(response)` still exists in v4 and is the right tool for a concrete schema. We decode manually here only because the **generic** factory schema (chapter 9's `<R extends Schema.Top>`) can't satisfy its type constraints — for a fixed schema, prefer `schemaBodyJson`. The manual form:
 
 ```ts
 const json = yield* response.json
@@ -116,6 +121,15 @@ const data = Schema.decodeUnknownSync(Response as any)(json) as Schema.Schema.Ty
 ```
 
 `qilin/common.ts` uses this exact pattern. The `as any` is unfortunate but pragmatic.
+
+## Other client decorators worth knowing
+
+Two `HttpClient` decorators this chapter doesn't exercise but you'll reach for in production:
+
+- **`HttpClient.withRateLimiter(client, rateLimiter)`** — route every request through a `RateLimiter` (token-bucket / fixed-window), the clean way to respect upstream quotas without hand-rolling throttling.
+- **`HttpClient.retryTransient({ retryOn, while?, schedule? })`** — retry transient failures, where `retryOn` is `"errors-only"` (default), `"response-only"` (retry on retryable *responses*, e.g. 429/503), or `"errors-and-responses"`. Pair it with a `Schedule` (chapter 10) for bounded backoff.
+
+Both compose the same way as `filterStatusOk` — decorate once, reuse everywhere.
 
 ## Takeaways
 

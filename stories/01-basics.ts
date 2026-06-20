@@ -82,6 +82,12 @@ const program = Effect.gen(function* () {
 
 console.log("5) try + tryPromise:", await Effect.runPromise(program));
 
+/* (b84) When you don't need a custom error mapper, `Effect.try` also accepts
+ * a **bare thunk** — a thrown value becomes a `Cause.UnknownError` instead of
+ * your own typed error. Handy for quick parses where any failure is fine. */
+const parsedQuick = Effect.try(() => JSON.parse('{"ok": true}') as { ok: boolean });
+console.log("5b) try (bare thunk):", Effect.runSync(parsedQuick));
+
 /* ---------- 6. Why `yield*` instead of `pipe + flatMap`? ------------------ *
  *
  * In v4, service tags (Context.Service — called ServiceMap.Service in older

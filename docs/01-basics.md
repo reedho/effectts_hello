@@ -35,6 +35,14 @@ const fetched = Effect.tryPromise({
 
 The `catch` arm is where untyped throws become typed errors in the `E` channel.
 
+Since beta.84, `Effect.try` also accepts a **bare thunk** when you don't need a custom mapper — a thrown value becomes a `Cause.UnknownError` instead of your own error type:
+
+```ts
+const parsedQuick = Effect.try(() => JSON.parse(input))  // Effect<unknown, UnknownError>
+```
+
+Use the `{ try, catch }` object form when you want a typed error; the bare thunk when any failure is acceptable.
+
 ## Running effects
 
 ```ts
@@ -108,7 +116,7 @@ const safe = boom.pipe(
 // safe: Effect<string, never, never>
 ```
 
-### Version note (v4-beta.57)
+### Version note (still true as of beta.85)
 
 There is **no** `Effect.catchAll` in the version you're running. The replacements are:
 

@@ -67,7 +67,7 @@ const UserPrefs = Schema.Struct({
 
 ### Two gotchas
 
-1. **v4-beta.57 takes an `Effect`, not a thunk.** Use `Effect.succeed(value)` as shown. (tbiz_ts code for beta.31 uses `() => value` — that won't compile here.)
+1. **v4 takes an `Effect`, not a thunk (still true at beta.85).** Use `Effect.succeed(value)` as shown. (tbiz_ts code for beta.31 uses `() => value` — that won't compile here.) Since beta.67 the `Effect` may also require services (context `R`) and fail with `SchemaError`.
 2. **The output type still shows `T | undefined`.** `withDecodingDefault` guarantees the value at runtime, but TypeScript doesn't know that. Guard reads with `prefs.rating ?? 0` if the language service flags `undefined`.
 
 ## Walking SchemaIssue for per-field error messages
@@ -98,6 +98,8 @@ The v3 → v4 tag renames are important here:
 | `"Missing"`          | `"MissingKey"`        |
 | `"Unexpected"`       | `"UnexpectedKey"`     |
 | `"Transformation"`   | `"Encoding"`          |
+
+One v4 leaf that isn't a rename but matters here: **`"InvalidValue"`**. `"InvalidType"` means the wrong *type* (string vs number); `"InvalidValue"` means the right type that **fails a value constraint** — i.e. what a failing `Schema.check`/filter bottoms out as, formatted by default as `Invalid data <actual>`. That's exactly why this chapter's `getIssueMessage` — which has no `"InvalidValue"` branch and falls through to `default: String(issue)` — surfaces the generic `"Invalid data \"bad\""` for the email field instead of the custom `message`. Add an `"InvalidValue"` case (or read the `message` annotation off the wrapping `"Filter"` issue) if you want per-constraint custom text.
 
 The full implementation is in [`tbiz_ts/packages/rpc-client/src/form/validators.ts`](../../../works/tbiz_ts/packages/rpc-client/src/form/validators.ts) — it wires into TanStack Form.
 

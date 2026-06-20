@@ -146,6 +146,8 @@ describe("DB suite", () => {
 })
 ```
 
+Since beta.67, `@effect/vitest` **forks the memo map for nested `it.layer` suites** — sibling suites no longer share each other's layer setup, while a parent layer is still shared down into its children. So nesting `it.layer` blocks now isolates sibling state correctly; you can build a shared base in an outer `it.layer` and layer per-suite overrides inside without cross-contamination.
+
 ## TestClock — deterministic time
 
 `it.effect` automatically provides `TestContext`, which includes a
@@ -167,6 +169,8 @@ it.effect("delays resolve via TestClock", () =>
 ```
 
 For real-clock tests, switch to `it.live(...)`.
+
+Because `it.effect` always provides an ambient `Scope`, `TestClock.adjust` works here as shown. Note for non-`it.effect` setups: beta.70 fixed `TestClock` adjustment when the `TestClock` *layer* is provided to a program run **without** an ambient `Scope` — previously that path could fail to advance. Inside `@effect/vitest`'s `it.effect`/`it.layer` you always have a Scope, so you're on the safe path by default.
 
 ## When to fall back to `bun:test`
 

@@ -25,13 +25,13 @@
 ## Per-version highlights
 
 ### 4.0.0-beta.85 — **codebase target**
-- **`Random.choice`** — pick a random element from an iterable (chapter 10 candidate).
+- **`Random.choice`** — pick a random element from an iterable (demonstrated in chapter 10 §10).
 - Template-literal arbitraries derived from encoded parts; semantic matching for `TemplateLiteral` parsing and index-signature keys; schema class `.extend` now accepts a `Struct` and preserves the extension's checks. (Schema internals — no storybook change.)
 - (unstable) Redis driver default changed `LPUSH` → `RPUSH`.
 
 ### 4.0.0-beta.84
-- **`Effect.transposeOption`** — `Option<Effect<A, E, R>>` → `Effect<Option<A>, E, R>` (chapter 10 candidate).
-- **`Effect.try` now accepts a thunk directly** (matching `Effect.tryPromise`); thrown values map to `Cause.UnknownError`. `Effect.tryPromise` only creates an `AbortController` when the thunk declares an `AbortSignal` param, and guards a throwing `catch` mapper so it becomes a defect instead of hanging.
+- **`Effect.transposeOption`** — `Option<Effect<A, E, R>>` → `Effect<Option<A>, E, R>` (demonstrated in chapter 10 §9).
+- **`Effect.try` now accepts a thunk directly** (matching `Effect.tryPromise`); thrown values map to `Cause.UnknownError` (demonstrated in chapter 01 §5b). `Effect.tryPromise` only creates an `AbortController` when the thunk declares an `AbortSignal` param, and guards a throwing `catch` mapper so it becomes a defect instead of hanging.
 - **`SchemaError` now extends `Data.TaggedError`** (so it is also a native `Error`). `SchemaParser` Promise APIs reject an `Error` whose `cause` is the `SchemaIssue.Issue`. Schema/SchemaParser `Effect`/`Exit`/`is`/`asserts`/`Promise`/`Sync`/`Result`/`Option`/`make` adapters now distinguish schema issues from non-schema causes. Chapter 11 typed-error assertions re-verified — still green.
 - **`ConfigProvider` composition tightened:** `orElse` keeps each side's own `nested`/`mapInput`; path transforms compose as one function; `Config.nested` tracks the logical path in `Config`; the low-level **`Config.make` constructor is no longer exported** (use combinators or `ConfigProvider.make`); `ConfigProvider.fromDir` returns `undefined` when absent so `orElse` can fall back. Chapter 06 uses only `Config.string/number` + `withDefault` + `ConfigProvider.fromMap` — unaffected.
 - Import unconstrained JSON Schema nodes as `Schema.Json` instead of `Schema.Unknown`.
@@ -62,7 +62,7 @@
 - Schema adapter failures aligned: `Schema` result/promise/sync adapters surface `SchemaError`; `SchemaParser` equivalents expose `SchemaIssue.Issue`. `Schema.Redacted` options preserved across roundtrips. `HttpApiSecurity` bearer/http credential decoding fixed.
 
 ### 4.0.0-beta.73 / .71
-- **`Schedule.tap`** — observe full schedule metadata without altering inputs/outputs (chapter 10 candidate).
+- **`Schedule.tap`** — observe full schedule metadata without altering inputs/outputs (demonstrated in chapter 10 §5d).
 - **`.value` reintroduced on `Schema.Array` / `Schema.NonEmptyArray`** (consistency with `Chunk`/`HashSet`).
 - **`catch*` combinators no longer silently drop unhandled error types** (chapters 04/10 — correctness win; re-verified our `catchTag`/`catchTags` examples still narrow as documented).
 - `Data.$is(tag)` documented to check only `_tag`, not the full structure. `Redacted` is encodable by default (opt-out available). Simple/logfmt loggers no longer double-quote string messages/annotations. `HttpApiSecurity.http` for custom schemes.

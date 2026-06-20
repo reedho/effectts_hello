@@ -8,7 +8,7 @@
  * Run: `bun stories/10-composing-effects.ts`
  */
 
-import { Console, Duration, Effect, Schedule, Schema, pipe } from "effect";
+import { Console, Duration, Effect, Option, Random, Schedule, Schema, pipe } from "effect";
 
 /* ---------- 1. Effect.all — run many in parallel ------------------------- *
  * With a record input you get a record back (great for readability).
@@ -168,6 +168,32 @@ const tertiary = Effect.sync(() => {
 console.log("5c) firstSuccessOf:", Effect.runSync(Effect.firstSuccessOf([primary, secondary, tertiary])));
 // → "secondary result"; tertiary is never touched.
 
+/* ---------- 5d. Schedule.tap — observe each retry decision --------------- *
+ * (b71) `Schedule.tap` runs an effect for every schedule decision WITHOUT
+ * altering the schedule's inputs or outputs. The callback receives the full
+ * metadata — `attempt`, `output`, computed `duration` (next delay), and
+ * `elapsed` time — which is ideal for logging/metrics on backoff without
+ * touching the retried effect itself.
+ */
+
+let tappedTries = 0;
+const tappedFlaky = Effect.gen(function* () {
+  tappedTries++;
+  if (tappedTries < 3) return yield* Effect.fail(new Error("transient"));
+  return `ok after ${tappedTries}`;
+});
+
+const observedSchedule = pipe(
+  Schedule.exponential(Duration.millis(10)),
+  Schedule.both(Schedule.recurs(5)),
+  Schedule.tap((meta) =>
+    Console.log(`   ↻ attempt ${meta.attempt}: next delay ${Duration.toMillis(meta.duration)}ms`),
+  ),
+);
+
+console.log("5d) Schedule.tap:");
+console.log("   →", await Effect.runPromise(Effect.retry(tappedFlaky, observedSchedule)));
+
 /* ---------- 6. Effect.fn — the production sweet-spot --------------------- *
  * The effect-solutions recommendation for any function that returns an
  * Effect: wrap it in `Effect.fn("Name")(function* (args) { ... })`. You
@@ -219,3 +245,30 @@ const spanned = pipe(
   Effect.withSpan("spanned-fetch", { attributes: { why: "demo" } }),
 );
 void spanned;
+
+/* ---------- 9. Effect.transposeOption — flip Option<Effect> -------------- *
+ * (b84) When a step is OPTIONAL and effectful — `Option<Effect<A>>` —
+ * `transposeOption` flips it into a single `Effect<Option<A>>` you yield
+ * once. `None` → `Effect.succeed(None)` (the effect never runs); `Some(fx)`
+ * runs `fx` and wraps its result in `Some`. Cleaner than matching the
+ * Option by hand to decide whether to run the effect.
+ */
+
+const lookupIfEnabled = (enabled: boolean) =>
+  Effect.transposeOption(
+    enabled ? Option.some(Effect.succeed("feature-value")) : Option.none(),
+  );
+
+console.log("9) transposeOption(on): ", await Effect.runPromise(lookupIfEnabled(true)));
+console.log("   transposeOption(off):", await Effect.runPromise(lookupIfEnabled(false)));
+// → Some("feature-value") / None — the effect runs only in the Some branch.
+
+/* ---------- 10. Random.choice — pick a random element ------------------- *
+ * (b85) `Random.choice` selects a random element from an iterable via the
+ * Effect `Random` service — so it's reproducible under `TestRandom` in
+ * tests. For a non-empty array the result is `Effect<A>`; for a general
+ * iterable it's `Effect<A, NoSuchElementError>` (an empty input fails).
+ */
+
+const pickRegion = Random.choice(["us-east", "us-west", "eu-central"] as const);
+console.log("10) Random.choice:", await Effect.runPromise(pickRegion));

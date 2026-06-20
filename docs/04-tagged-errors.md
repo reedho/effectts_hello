@@ -75,7 +75,7 @@ const fetchSomething = (url: string) =>
   })
 ```
 
-Why not just `unknown`? Because you can serialize a `NetworkError` to JSON (to ship to a logging service, or persist in a DB), and `Schema.Defect` turns the inner Error/object into something round-trippable. `unknown` breaks on `JSON.stringify`.
+Why not just `unknown`? Because you can serialize a `NetworkError` to JSON (to ship to a logging service, or persist in a DB), and `Schema.Defect()` gives the inner value a JSON-encoded form, whereas `unknown` breaks on `JSON.stringify`. One caveat since beta.76: `Schema.Defect()` models the defect as `unknown` — an **`Error`** round-trips back to an `Error`, but an arbitrary object like `{ message: "boom", code: 42 }` is normalized to a bare `Error` on decode (extra fields are dropped). Wrap real `Error` instances (as the story does) when you need the inner value back intact.
 
 ## Typed errors vs. defects
 

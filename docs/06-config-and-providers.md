@@ -51,6 +51,8 @@ const requestTimeout = yield* Config.schema(Schema.DurationFromString, "REQUEST_
 
 That same `Port` schema also decodes HTTP query params, validates form input, etc. One source of truth. For literal unions, `Config.literals` skips the round-trip through a named Schema. For durations, `Schema.DurationFromString` (b60) takes any string `Duration.fromInput` accepts.
 
+> **`Config.withDefault` only fills in *missing* values (since beta.81).** If `REQUEST_TIMEOUT` is **unset**, you get the `Duration.seconds(30)` default. But if it's **present and invalid** (e.g. `REQUEST_TIMEOUT="abc"`), the schema validation error now propagates instead of silently falling back to the default — and filter (`Schema.check`) failures are no longer swallowed either. `withDefault` is for absence, not for masking bad input.
+
 ## Wrapping Config in a Service
 
 This is the key structural pattern. A Config service has a `layer` (reads from the provider) and a `testLayer` (hardcoded values):

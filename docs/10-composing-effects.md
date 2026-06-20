@@ -169,12 +169,51 @@ Distinct from neighbouring patterns:
 
 Edge case: an empty iterable defects with `"Received an empty collection of effects"`. Build the list dynamically (e.g. one entry per configured endpoint) and you'll see this if all entries get filtered out.
 
+## Observing retries: `Schedule.tap` (beta.71)
+
+`Schedule.tap` runs an effect for **every schedule decision** without altering the schedule's inputs or outputs — drop it onto any retry/repeat policy to log or emit metrics on backoff, leaving the retried effect untouched.
+
+```ts
+const observed = Schedule.exponential("10 millis").pipe(
+  Schedule.both(Schedule.recurs(5)),
+  Schedule.tap((meta) =>
+    Console.log(`attempt ${meta.attempt}: next delay ${Duration.toMillis(meta.duration)}ms`)
+  ),
+)
+
+Effect.retry(flaky, observed)
+```
+
+The callback receives the full `Metadata` — `attempt`, `output`, the computed `duration` (next delay), and `elapsed` timing. (`Schedule.tapInput` / `Schedule.tapOutput` exist for narrower observation.)
+
+## Optional effectful steps: `Effect.transposeOption` (beta.84)
+
+When a step is both **optional** and **effectful** you get an `Option<Effect<A>>`. `Effect.transposeOption` flips it into a single `Effect<Option<A>>` you can yield once:
+
+```ts
+Effect.transposeOption(Option.some(Effect.succeed("value")))  // Effect<Option<"value">> → Some("value")
+Effect.transposeOption(Option.none())                          // Effect<Option<never>>   → None (effect never runs)
+```
+
+`None` short-circuits to `Effect.succeed(None)` — the inner effect runs only in the `Some` branch. Cleaner than `Option.match`-ing by hand to decide whether to run the effect.
+
+## Random elements: `Random.choice` (beta.85)
+
+`Random.choice` picks a random element from an iterable through the Effect `Random` service, so it's **reproducible under `TestRandom`** (see chapter 11) — unlike `Math.random()`.
+
+```ts
+Random.choice(["us-east", "us-west", "eu-central"] as const)  // Effect<"us-east" | "us-west" | "eu-central">
+```
+
+For a non-empty array the result is `Effect<A>`; for a general iterable it's `Effect<A, NoSuchElementError>` (an empty input fails).
+
 ## Takeaways
 
 - `Effect.fn` first — spans, call-site traces, clean signatures.
 - `Effect.all` for heterogeneous parallel work; `Effect.forEach` for homogeneous.
 - `Effect.tap` for logging and metrics.
 - `Effect.cachedWithTTL` for "auth once, reuse" patterns.
-- `Schedule.exponential + both(recurs(n))` covers most retry policies.
+- `Schedule.exponential + both(recurs(n))` covers most retry policies; add `Schedule.tap` to observe backoff.
 - `Effect.firstSuccessOf` for prioritized-fallback patterns (primary → secondary → cache).
+- `Effect.transposeOption` to run an optional effect; `Random.choice` for reproducible random picks.
 - `Effect.fn` inside, `pipe` outside.
