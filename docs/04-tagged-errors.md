@@ -65,7 +65,7 @@ When you call fetch / axios / firebase / any non-Effect library, the "error" val
 ```ts
 class NetworkError extends Schema.TaggedErrorClass<NetworkError>()("NetworkError", {
   message: Schema.String,
-  cause: Schema.Defect,   // safely holds anything — Error, unknown, whatever
+  cause: Schema.Defect(),   // safely holds anything — Error, unknown, whatever
 }) {}
 
 const fetchSomething = (url: string) =>

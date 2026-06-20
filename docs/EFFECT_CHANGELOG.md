@@ -4,7 +4,7 @@
 >
 > Skipped: AI / LanguageModel / EmbeddingModel, MCP, Workflow, Cluster, RPC internals, CLI prompt UX, Atom reactivity. Read [`packages/effect/CHANGELOG.md`](https://github.com/Effect-TS/effect-smol/blob/main/packages/effect/CHANGELOG.md) for the full list.
 >
-> Baseline: `tbiz_ts` was authored against beta.31. This codebase targets **beta.66** (latest published).
+> Baseline: `tbiz_ts` was authored against beta.31. This codebase targets **beta.85** (latest published).
 
 ## Quick map: which changes touch our chapters
 
@@ -13,18 +13,74 @@
 | 01 Basics | `Effect.fn` arity (b22), `Effect.findFirst` (b21), `Effect.context()` default (b27), `runSync` async error (b37), `Effect.tx` rename (b42), `Effect.abortSignal` (b57), `Effect.firstSuccessOf` (b61), `Effect.match{,Effect}` shape — `catchAll` removed |
 | 02 Schema modeling | `OptionFromOptionalNullOr` (b32), `Newtype` (b29), `Chunk` schema (b24), `ArrayEnsure` (b35), `StringFromBase64`/`Hex`/`UriComponent` + `*FromString` decoders (b44), `DurationFromString` (b60), JSON-Schema `enum` collapse (b41), `toCodecJson` typed `Json` (b31) |
 | 03 Validation | `Schema.makeFilter` `{path,issue}` rename + `FilterIssue[]` (b51), `decodeUnknownResult`/`encodeUnknownResult` (b36), `MakeOptions.disableChecks` rename (b38), `decodeUnknownExit` unchanged |
-| 04 Tagged errors | `Schema.TaggedErrorClass` instance `name = tag` (b28), `withConstructorDefault` accepts `Effect<T>` (b44), **`Effect.Yieldable` type removed (b66)** — `yield* new MyError(...)` still works via iterator protocol; only explicit type references break |
+| 04 Tagged errors | `Schema.TaggedErrorClass` instance `name = tag` (b28), `withConstructorDefault` accepts `Effect<T>` (b44), **`Effect.Yieldable` type removed (b66)** — `yield* new MyError(...)` still works via iterator protocol; only explicit type references break, **`Schema.Defect`/`Schema.Error` now constructor functions — `Schema.Defect()` (b76)**, `catch*` no longer drops unhandled error types (b71) |
 | 05 Services & layers | `ServiceMap` → `Context` rename (b57), `Layer.suspend` (b43), `Layer.tap`/`tapError`/`tapCause` (b32), `Layer.mock` is dual + works with Stream/Channel (b31/b35), Layer unification fix (b44), `Effect.acquireDisposable` (b63) |
-| 06 Config & providers | `Config.Success` type util (b35), `Config.literals` convenience (b60), `Config.schema(...)` unchanged, `ConfigProvider.fromUnknown` no `_`-split — pass nested objects |
+| 06 Config & providers | `Config.Success` type util (b35), `Config.literals` convenience (b60), `Config.schema(...)` unchanged, `ConfigProvider.fromUnknown` no `_`-split — pass nested objects, `Config.withDefault` recovers only from *missing* data (b81), `Config.make` no longer exported + `ConfigProvider` composition tightened (b84) |
 | 07 HTTP client | `HttpClient.withRateLimiter` (b24, b25 polish), `HttpClientResponse` pipeable (b30), partial-stream abort (b29), URL builder + encoded params (b38/b39), `responseMode: "response-only"` (b38), `bodyJson` returns `Effect<Request>` |
 | 08 ManagedRuntime | Tracks fibers in a scope (b41) |
 | 09 JSON-RPC | `decodeJsonRpcRaw` array branch removed (b35), falsey `id` (`0`, `""`) accepted (b43), `RpcSerialization.makeMsgPack` for Cloudflare workers (b51) |
 | 10 Composing | `Effect.cachedWithTTL` start-on-value (b36), `Schedule.intersect` → `Schedule.both` (b39 deprecation, removed by b57), `Effect.repeat` returns inner value (b44), retry/repeat narrowing (b33) |
-| 11 Testing | `TestClock.currentTimeNanosUnsafe` floor fix (b53), `Layer.mock` ergonomics (b31), `Effect.ignore` accepts message (b30), `HttpApiTest` module (b63) for HttpApi integration tests |
+| 11 Testing | `TestClock.currentTimeNanosUnsafe` floor fix (b53), `Layer.mock` ergonomics (b31), `Effect.ignore` accepts message (b30), `HttpApiTest` module (b63) for HttpApi integration tests, `@effect/vitest` forks memo maps for nested `it.layer` (b67), `TestClock` no-ambient-`Scope` fix (b70), `SchemaError` extends `Data.TaggedError` (b84) |
 
 ## Per-version highlights
 
-### 4.0.0-beta.66 — **codebase target**
+### 4.0.0-beta.85 — **codebase target**
+- **`Random.choice`** — pick a random element from an iterable (chapter 10 candidate).
+- Template-literal arbitraries derived from encoded parts; semantic matching for `TemplateLiteral` parsing and index-signature keys; schema class `.extend` now accepts a `Struct` and preserves the extension's checks. (Schema internals — no storybook change.)
+- (unstable) Redis driver default changed `LPUSH` → `RPUSH`.
+
+### 4.0.0-beta.84
+- **`Effect.transposeOption`** — `Option<Effect<A, E, R>>` → `Effect<Option<A>, E, R>` (chapter 10 candidate).
+- **`Effect.try` now accepts a thunk directly** (matching `Effect.tryPromise`); thrown values map to `Cause.UnknownError`. `Effect.tryPromise` only creates an `AbortController` when the thunk declares an `AbortSignal` param, and guards a throwing `catch` mapper so it becomes a defect instead of hanging.
+- **`SchemaError` now extends `Data.TaggedError`** (so it is also a native `Error`). `SchemaParser` Promise APIs reject an `Error` whose `cause` is the `SchemaIssue.Issue`. Schema/SchemaParser `Effect`/`Exit`/`is`/`asserts`/`Promise`/`Sync`/`Result`/`Option`/`make` adapters now distinguish schema issues from non-schema causes. Chapter 11 typed-error assertions re-verified — still green.
+- **`ConfigProvider` composition tightened:** `orElse` keeps each side's own `nested`/`mapInput`; path transforms compose as one function; `Config.nested` tracks the logical path in `Config`; the low-level **`Config.make` constructor is no longer exported** (use combinators or `ConfigProvider.make`); `ConfigProvider.fromDir` returns `undefined` when absent so `orElse` can fall back. Chapter 06 uses only `Config.string/number` + `withDefault` + `ConfigProvider.fromMap` — unaffected.
+- Import unconstrained JSON Schema nodes as `Schema.Json` instead of `Schema.Unknown`.
+
+### 4.0.0-beta.83 / .82
+- HttpApi `.d.ts` export fix (schema metadata types) and endpoint error inference when success schemas include streams. Chapter 07 / `HttpApiTest` follow-up only.
+
+### 4.0.0-beta.81
+- **`Config.withDefault` behavioral tightening:** now only recovers from **missing** data for literal/union schemas; an invalid *present* value now propagates a validation error instead of using the default, and it no longer recovers from schema **filter** failures. Chapter 06's `Config.withDefault("localhost")` / `Config.withDefault(Duration.seconds(30))` rely on the missing-data path — re-verified, still behaves as documented.
+- `Schema.toTaggedUnion(...).isAnyOf` narrowing fixed for custom discriminant keys.
+- **HTTP API streaming response support** (chapter 07 candidate if we grow an HttpApi server story).
+
+### 4.0.0-beta.80 / .79
+- (DX/bundle) Module-level side effects that defeated tree-shaking removed (`Option`, `Headers`, `Logger`, `Utils`) — a minimal `runFork` bundle shrinks ~1.3% gzipped.
+- HTTP API client now **encodes path parameters** when building request URLs (chapter 07). `Struct` key renaming / `Schema.encodeKeys` support symbol keys and reject duplicate encoded keys. Container-level schema checks validate against the decoded value; checks may no longer be attached directly to `Schema.suspend(...)`.
+- Schema arbitrary derivation migrated to flat `OrderedConstraint` / filter-metadata model (only affects custom `toArbitrary` annotations — none here).
+
+### 4.0.0-beta.78 / .77
+- `Schema.Defect` JSON encoding handles `Error` values whose `message` is not a string.
+- **OTEL environment-variable configuration** for the unstable OTLP exporter; resource env vars now preferred over explicit `OtlpResource.fromConfig` options. Relates to the chapter-11/observability OTel logger notes.
+
+### 4.0.0-beta.76
+- **`Schema.Error` / `Schema.Defect` are now constructor functions** — `Schema.Error()` / `Schema.Defect()` instead of bare constants. `ErrorWithStack` → `Error({ includeStack: true })`, `DefectWithStack` → `Defect({ includeStack: true })`. `Schema.Defect()` now models defects as `unknown` with a JSON-encoded form: error-shaped JSON with a string `message` decodes back to an `Error`, but plain objects like `{ message: "boom" }` **no longer round-trip unchanged**. **APPLIED:** `cause: Schema.Defect` → `cause: Schema.Defect()` in `stories/04-tagged-errors.ts`, `stories/09-jsonrpc-schema-factory.ts`, and `docs/04`.
+- `Schema.isGUID` added; `Schema.isUUID` accepts the RFC 9562 max UUID.
+
+### 4.0.0-beta.75
+- **`Types.MergeRecord` alias removed — use `Types.MergeLeft`.** (Not used here.)
+- Schema adapter failures aligned: `Schema` result/promise/sync adapters surface `SchemaError`; `SchemaParser` equivalents expose `SchemaIssue.Issue`. `Schema.Redacted` options preserved across roundtrips. `HttpApiSecurity` bearer/http credential decoding fixed.
+
+### 4.0.0-beta.73 / .71
+- **`Schedule.tap`** — observe full schedule metadata without altering inputs/outputs (chapter 10 candidate).
+- **`.value` reintroduced on `Schema.Array` / `Schema.NonEmptyArray`** (consistency with `Chunk`/`HashSet`).
+- **`catch*` combinators no longer silently drop unhandled error types** (chapters 04/10 — correctness win; re-verified our `catchTag`/`catchTags` examples still narrow as documented).
+- `Data.$is(tag)` documented to check only `_tag`, not the full structure. `Redacted` is encodable by default (opt-out available). Simple/logfmt loggers no longer double-quote string messages/annotations. `HttpApiSecurity.http` for custom schemes.
+
+### 4.0.0-beta.70 / .69
+- **`TestClock` adjustment fixed when its layer is provided to programs run without an ambient `Scope`** (chapter 11 relevance — our suites use `it.effect`/`it.layer`, unaffected; good to know).
+- `Stream.scoped` / `Channel.scoped` now run pull effects with the scoped resource scope. `Command.withHidden` / `Flag.withHidden` (CLI, non-storybook).
+
+### 4.0.0-beta.68
+- **`Random.nextUUIDv4` REMOVED** — the base `Random` service is not cryptographically secure. Use the new platform-agnostic **`Crypto`** service (`randomUUIDv4` / `randomUUIDv7`). (Not used here.)
+- **`Schema.asserts` / `SchemaParser.asserts` now assert directly** — `asserts(schema, input)`; `Schema.Codec.ToAsserts` removed (chapter 03 — not used). `Model.Generated` renamed to `Model.GeneratedByDb`. `Stream.broadcastN` added; `Channel.decodeText` UTF-8 boundary fix.
+
+### 4.0.0-beta.67
+- **`SchemaParser.makeUnsafe` renamed to `SchemaParser.make`.** (Not used here.)
+- **`@effect/vitest` now forks memo maps for nested `it.layer` suites** — sibling setup is isolated while parent sharing is preserved (chapter 11 relevance).
+- Schema decode/encode helpers again accept parse options; `Schema.withDecodingDefault*` accept a context `R` and may fail with `SchemaError` (chapter 03/06 — not exercised).
+
+### 4.0.0-beta.66
 - **`Effect.Yieldable` type removed.** Tagged-error / yieldable instances still work via the iterator protocol (`yield* new MyError(...)` is fine), but code that explicitly references the `Effect.Yieldable` *type* breaks. Verified on bump: story 04 uses only the value form, no source changes needed.
 - `Schema.Struct` field types preserve IDE provenance (`Type_<>` rewritten with `keyof F as …`): Go-to-Definition now jumps to the originating Struct field. Pure DX win.
 - `HttpApiTest.groups` accepts an optional `baseUrl` override (default `"http://localhost:3000"`).
@@ -247,10 +303,13 @@
 - `Effect.findFirst` / `findFirstFilter` for short-circuiting effectful searches.
 - Span parent-span linking fix.
 
-## Watchlist (re-audit when bumping past beta.66)
+## Watchlist (re-audit when bumping past beta.85)
 
-Items the alignment doc (`CHANGES.md`) flagged as version-skewed, plus new items introduced by beta.59–66 — re-check when bumping:
+Items the alignment doc (`CHANGES.md`) flagged as version-skewed, plus new items introduced through beta.85 — re-check when bumping:
 
+- **`Schema.Defect` / `Schema.Error` are constructor functions (b76)** — applied as `Schema.Defect()` in stories/04, stories/09, docs/04. If a future story wraps foreign errors, use the call form. Remember plain `{ message }` objects no longer round-trip through `Schema.Defect()`.
+- **`Config.withDefault` recovers only from *missing* data (b81)** — chapter 06 relies on this; an invalid *present* value now surfaces a validation error. Keep story 06 defaults on the missing-data path.
+- **`Config.make` unexported + `ConfigProvider` composition (b84)** — if chapter 06 ever builds a custom provider, use `ConfigProvider.make` / combinators, not `Config.make`.
 - **`Effect.Yieldable` type removed (b66)** — chapter 04 documents yieldable tagged errors. Source uses only the value form (`yield* new MyError(...)`), which still works via iterator protocol. Verify on bump that no docs reference the type signature and that `Schema.TaggedErrorClass` / `Data.TaggedError` instances still yield cleanly.
 - **`Effect.catchAll` reintroduction** — `match` / `matchEffect` / `catchTag` is the current shape.
 - **`ServiceMap` alias** — story 05's version-skew note is moot if it returns.

@@ -31,9 +31,10 @@ class AuthError extends Schema.TaggedErrorClass<AuthError>()("AuthError", {
 
 class NetworkError extends Schema.TaggedErrorClass<NetworkError>()("NetworkError", {
   message: Schema.String,
-  // Schema.Defect safely wraps unknown errors from external libraries
+  // Schema.Defect() safely wraps unknown errors from external libraries
   // (fetch, axios, Firebase, ...). Turns them into serializable values.
-  cause: Schema.Defect,
+  // (beta.76: Schema.Defect is now a constructor function, not a constant.)
+  cause: Schema.Defect(),
 }) {}
 
 type AppError = ApiError | AuthError | NetworkError;

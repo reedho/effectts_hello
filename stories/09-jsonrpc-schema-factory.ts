@@ -64,7 +64,7 @@ class RpcError extends Schema.TaggedErrorClass<RpcError>()("RpcError", {
 
 class ParseError extends Schema.TaggedErrorClass<ParseError>()("ParseError", {
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
 let nextId = 0;
